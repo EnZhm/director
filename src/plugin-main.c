@@ -18,12 +18,14 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include <obs-module.h>
 #include <plugin-support.h>
+#include "../include/pd-clock-api.h" /* compile-check the public consumer header (C) */
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 
 extern void palette_lock_filter_load(void);
 extern void palette_director_dock_load(void);
+extern void pd_clock_api_register(void);
 
 bool obs_module_load(void)
 {
@@ -31,6 +33,7 @@ bool obs_module_load(void)
 
 	palette_lock_filter_load();
 	palette_director_dock_load();
+	pd_clock_api_register();
 
 	return true;
 }

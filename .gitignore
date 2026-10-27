@@ -6,6 +6,7 @@
 !/build-aux
 !/cmake
 !/data
+!/include
 !/src
 !/tests
 !/third_party

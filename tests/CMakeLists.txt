@@ -58,6 +58,7 @@ add_executable(
   test_set_file.cpp
   test_audio_level.cpp
   test_drop_cycle.cpp
+  test_clock_api.cpp
   fixtures/gen_fixtures.cpp
 )
 target_link_libraries(pd_director_tests PRIVATE pd_director pd_palette)

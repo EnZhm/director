@@ -21,6 +21,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include <media-io/audio-io.h>
 #include <util/platform.h>
+#include <util/util_uint64.h>
 
 #include <algorithm>
 #include <atomic>
@@ -36,6 +37,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <thread>
 #include <vector>
 
+#include "director/clock_api.h"
 #include "director/director.h"
 
 namespace {
@@ -71,6 +73,9 @@ public:
 	}
 
 	void clear() { r_.store(w_.load(std::memory_order_acquire), std::memory_order_release); }
+	/* absolute (monotonic) sample positions, for the audio-timestamp mapping */
+	size_t write_pos() const { return w_.load(std::memory_order_acquire); }
+	size_t read_pos() const { return r_.load(std::memory_order_acquire); }
 
 private:
 	std::vector<float> buf_ = std::vector<float>(kCap);
@@ -241,6 +246,11 @@ struct pd_host {
 	FloatRing ring;
 	std::atomic<uint32_t> channels{2};
 	std::atomic<uint64_t> audio_frames{0};
+	/* audio timestamp marker (seqlock; audio thread writes, worker reads):
+	 * ring write position `ats_w` ends at OBS timestamp `ats_ts` (ns) */
+	std::atomic<uint32_t> ats_seq{0};
+	std::atomic<uint64_t> ats_w{0};
+	std::atomic<uint64_t> ats_ts{0};
 
 	std::atomic<Config *> pending{nullptr};
 	unsigned long long layout_gen = 0; // pd_host_update caller only
@@ -269,6 +279,19 @@ struct pd_host {
 	std::deque<pdhost::LogLine> v_log;
 	uint64_t v_log_seq = 0;
 	std::deque<pdhost::TimelineSample> v_tl;
+
+	/* v1.1 clock API snapshot (worker writes ~every 5 ms; palette_director_clock reads) */
+	std::mutex clock_mx;
+	bool clk_valid = false;
+	double clk_beats = 0.0;
+	float clk_bpm = 0.0f, clk_conf = 0.0f;
+	uint64_t clk_beat = 0, clk_phrase = 0;
+	int clk_phrase_beats = 32, clk_section = 0, clk_steps = 2;
+	uint32_t clk_kicks = 0;
+	bool clk_drop_cycle = false, clk_silent = true, clk_paused = false, clk_enabled = true;
+	uint64_t clk_ts = 0;
+	int clk_source = 0;        /* 1 = OBS audio timestamp (mapped to wall clock), 0 = wall clock (no feed) */
+	pd::AudioClockMap clk_map; /* worker only */
 
 	/* worker-only state */
 	std::unique_ptr<pd::Director> dir;
@@ -305,6 +328,41 @@ static void on_audio(void *param, obs_source_t *source, const struct audio_data 
 		done += n;
 	}
 	h->audio_frames.fetch_add(audio->frames, std::memory_order_relaxed);
+
+	/* publish where the written samples sit on OBS's clock (v1.1 clock API) */
+	uint32_t sr = audio_output_get_sample_rate(obs_get_audio());
+	if (sr == 0)
+		sr = 48000;
+	const uint64_t end_ts = audio->timestamp + util_mul_div64(audio->frames, 1000000000ULL, sr);
+	const uint32_t seq = h->ats_seq.load(std::memory_order_relaxed);
+	h->ats_seq.store(seq + 1, std::memory_order_relaxed);
+	std::atomic_thread_fence(std::memory_order_release);
+	h->ats_w.store(h->ring.write_pos(), std::memory_order_relaxed);
+	h->ats_ts.store(end_ts, std::memory_order_relaxed);
+	h->ats_seq.store(seq + 2, std::memory_order_release);
+}
+
+/* OBS timestamp of ring read position `r` (worker thread). false if no marker yet. */
+static bool audio_ts_at(pd_host *h, size_t r, uint32_t sr, uint64_t *out)
+{
+	uint64_t w = 0, ts = 0;
+	for (int tries = 0; tries < 8; ++tries) {
+		const uint32_t s1 = h->ats_seq.load(std::memory_order_acquire);
+		if (s1 & 1u)
+			continue;
+		w = h->ats_w.load(std::memory_order_relaxed);
+		ts = h->ats_ts.load(std::memory_order_relaxed);
+		std::atomic_thread_fence(std::memory_order_acquire);
+		if (h->ats_seq.load(std::memory_order_relaxed) == s1) {
+			if (ts == 0)
+				return false;
+			const int64_t diff = static_cast<int64_t>(r) - static_cast<int64_t>(w);
+			*out = static_cast<uint64_t>(static_cast<int64_t>(ts) +
+						     diff * 1000000000LL / static_cast<int64_t>(sr));
+			return true;
+		}
+	}
+	return false;
 }
 
 /* ---- registry ---- */
@@ -495,6 +553,7 @@ static void worker_main(pd_host *h)
 		if (sr == 0)
 			sr = 48000;
 		size_t got_total = 0;
+		bool synthetic = false;
 		for (;;) {
 			const size_t got = h->ring.read(buf.data(), buf.size());
 			if (!got)
@@ -511,6 +570,7 @@ static void worker_main(pd_host *h)
 			/* no audio source / feed stopped: keep the clock running at the fallback BPM */
 			size_t n = static_cast<size_t>(dt * sr);
 			std::fill(buf.begin(), buf.end(), 0.0f);
+			synthetic = true;
 			while (n) {
 				const size_t k = std::min(n, buf.size());
 				h->dir->push_audio(buf.data(), k, sr);
@@ -548,6 +608,37 @@ static void worker_main(pd_host *h)
 			token_t = 0.0;
 		}
 		const double beats_now = static_cast<double>(st.beat) + st.beat_frac;
+		{
+			std::lock_guard<std::mutex> g(h->clock_mx);
+			h->clk_valid = true;
+			h->clk_beats = beats_now;
+			h->clk_bpm = bpm;
+			h->clk_conf = st.confidence;
+			h->clk_beat = st.beat;
+			h->clk_phrase = st.phrase;
+			h->clk_phrase_beats = h->set.phrase_beats;
+			h->clk_section = static_cast<int>(st.section);
+			h->clk_kicks = st.kicks;
+			h->clk_drop_cycle = st.drop_cycle;
+			h->clk_steps = h->set.drop_cycle_steps_per_beat;
+			h->clk_silent = st.silent;
+			h->clk_paused = st.paused || st.panic;
+			h->clk_enabled = st.enabled;
+			/* the beat position refers to the last analysed sample: stamp it with that sample's
+			 * OBS audio timestamp mapped onto the wall clock (AudioClockMap), not with when the
+			 * bursty delivery let us process it. Residual: up to one 256-sample hop still pending
+			 * inside the Director (<= 5.3 ms). */
+			uint64_t ats = 0;
+			const uint64_t wall = os_gettime_ns();
+			if (got_total && audio_ts_at(h, h->ring.read_pos(), sr, &ats)) {
+				h->clk_ts = h->clk_map.observe(ats, wall); /* audio ts -> wall clock */
+				h->clk_source = 1;
+			} else if (got_total || synthetic) {
+				h->clk_map.reset();
+				h->clk_ts = wall;
+				h->clk_source = 0;
+			} /* else: no new audio this tick, the previous stamp still describes clk_beats */
+		}
 		{
 			std::lock_guard<std::mutex> g(h->view_mx);
 			for (const auto &e : evs) {
@@ -765,3 +856,101 @@ uint64_t id_for_filter(obs_source_t *filter)
 }
 
 } // namespace pdhost
+
+/* ------------------------------------------------------------------------- */
+/* v1.1 clock API (public, read-only; see include/pd-clock-api.h)             */
+
+static std::vector<pd::ClockInstance> clock_instances_locked() /* g_reg_mx held */
+{
+	std::vector<pd::ClockInstance> all;
+	for (const auto &kv : g_reg) {
+		pd::ClockInstance c;
+		c.id = kv.first;
+		const char *fn = obs_source_get_name(kv.second->filter);
+		c.filter = fn ? fn : "";
+		obs_source_t *parent = obs_filter_get_parent(kv.second->filter);
+		const char *pn = parent ? obs_source_get_name(parent) : nullptr;
+		c.parent = pn ? pn : "";
+		all.push_back(c);
+	}
+	return all;
+}
+
+static void proc_instances(void *, calldata_t *cd)
+{
+	std::string json;
+	{
+		std::lock_guard<std::mutex> g(g_reg_mx);
+		json = pd::clock_instances_json(clock_instances_locked());
+	}
+	calldata_set_string(cd, "json", json.c_str());
+	calldata_set_int(cd, "api_version", 1);
+}
+
+static void proc_clock(void *, calldata_t *cd)
+{
+	long long want_id = 0;
+	const char *src = nullptr;
+	const char *flt = nullptr;
+	calldata_get_int(cd, "id", &want_id);
+	calldata_get_string(cd, "source", &src);
+	calldata_get_string(cd, "filter", &flt);
+	calldata_set_int(cd, "api_version", 1);
+	calldata_set_bool(cd, "ok", false);
+	calldata_set_int(cd, "id", 0);
+
+	std::lock_guard<std::mutex> g(g_reg_mx);
+	const uint64_t id = pd::clock_resolve(clock_instances_locked(), want_id > 0 ? (uint64_t)want_id : 0,
+					      src ? src : "", flt ? flt : "");
+	auto it = g_reg.find(id);
+	if (id == 0 || it == g_reg.end())
+		return;
+	pd_host *h = it->second;
+	const bool filter_enabled = obs_source_enabled(h->filter);
+	std::lock_guard<std::mutex> g2(h->clock_mx);
+	if (!h->clk_valid)
+		return;
+	const uint64_t now = os_gettime_ns();
+	calldata_set_bool(cd, "ok", true);
+	calldata_set_int(cd, "id", (long long)id);
+	calldata_set_float(cd, "beats", h->clk_beats);
+	calldata_set_float(cd, "beats_now",
+			   pd::clock_extrapolate(h->clk_beats, h->clk_bpm, h->clk_ts, now, h->clk_paused));
+	calldata_set_float(cd, "bpm", h->clk_bpm);
+	calldata_set_float(cd, "confidence", h->clk_conf);
+	calldata_set_int(cd, "beat", (long long)h->clk_beat);
+	calldata_set_int(cd, "phrase", (long long)h->clk_phrase);
+	calldata_set_int(cd, "phrase_beats", h->clk_phrase_beats);
+	calldata_set_int(cd, "section", h->clk_section);
+	calldata_set_int(cd, "kicks", (long long)h->clk_kicks);
+	calldata_set_bool(cd, "drop_cycle", h->clk_drop_cycle);
+	calldata_set_int(cd, "drop_cycle_steps_per_beat", h->clk_steps);
+	calldata_set_bool(cd, "silent", h->clk_silent);
+	calldata_set_bool(cd, "paused", h->clk_paused);
+	calldata_set_bool(cd, "enabled", h->clk_enabled);
+	calldata_set_bool(cd, "filter_enabled", filter_enabled);
+	calldata_set_int(cd, "sample_ts_ns", (long long)h->clk_ts);
+	calldata_set_int(cd, "ts_source", h->clk_source);
+	calldata_set_int(cd, "now_ns", (long long)now);
+}
+
+extern "C" void pd_clock_api_register(void)
+{
+	proc_handler_t *ph = obs_get_proc_handler();
+	if (!ph) {
+		blog(LOG_WARNING, "[palette-director] clock API: no global proc handler");
+		return;
+	}
+	proc_handler_add(ph, "void palette_director_instances(out string json, out int api_version)", proc_instances,
+			 nullptr);
+	proc_handler_add(ph,
+			 "void palette_director_clock(in int id, in string source, in string filter, out bool ok, "
+			 "out int api_version, out float beats, out float beats_now, out float bpm, "
+			 "out float confidence, out int beat, out int phrase, out int phrase_beats, out int section, "
+			 "out int kicks, out bool drop_cycle, out int drop_cycle_steps_per_beat, out bool silent, "
+			 "out bool paused, out bool enabled, out bool filter_enabled, out int sample_ts_ns, "
+			 "out int ts_source, out int now_ns)",
+			 proc_clock, nullptr);
+	blog(LOG_INFO,
+	     "[palette-director] clock API v1 registered (palette_director_clock, palette_director_instances)");
+}
