@@ -10,9 +10,10 @@ before it and are listed here for completeness; their files are not republished.
 
 - New dock **Music**: BPM, confidence, phrase / bar / beat, the section and how long it
   has held, beat lights, the level and bass meter with the kick lamp, the last 64 beats
-  with director-action markers, and the audio controls (audio source, Input gain, Kick
-  sensitivity, Fallback BPM, Phrase length). Everything about hearing the music lives
-  there; the Palette Director dock keeps palettes, look, changes and lock behaviours.
+  (palette strip, section band, lock line, phrase ticks and bass trace), and the audio
+  controls (audio source, Input gain, Kick sensitivity, Fallback BPM, Phrase length).
+  Everything about hearing the music lives there; the Palette Director dock keeps palettes,
+  look, changes and lock behaviours.
 - New commands in the Music dock: **Phrase is now** (re-anchor the phrase and bar to this
   beat), **Drop now**, **Force breakdown** (Clip Director and Synesthesia follow through
   the clock's section), **Tap tempo**, **Lock BPM** and **Nudge**.

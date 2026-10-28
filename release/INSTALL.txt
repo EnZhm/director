@@ -77,8 +77,9 @@ It is set-and-forget: set it up once in the panel, then leave it running.
 -----------------------------
 The top of the panel is always visible and shows what is happening:
   - Filter: which Palette Lock filter the panel shows and controls.
-  - Status: lock state, director state, the live palette and Coverage, and
-    a one-line summary, for example
+  - Status: a section chip (GROOVE / BREAKDOWN / DROP), the lock state, the
+    director state, the live palette and Coverage, and a one-line summary,
+    for example
       Live: Neon Grid - next: Outrun on the next drop - lock ON
   - Palette pads (up to 16): tap a pad to make it live. The live pad has
     a bright outline and a crossfade bar; the next pad has a dashed
@@ -86,10 +87,8 @@ The top of the panel is always visible and shows what is happening:
   - Controls: Force off (hold), Force on (lights up while it holds the
     lock on), Pause director, Prev / Next palette, Rotate colours, PANIC
     (fills red while active; press it again to release).
-The section, BPM, beat lights, audio meter and the 64-beat timeline are in
-the Music dock (section 7).
-
-<!-- TODO(verify): confirm what the 1.2.0 Palette Director top strip still shows (section/BPM/confidence removed?) and that the pads and controls above are unchanged -->
+BPM, confidence, the beat lights, the audio meter and the 64-beat timeline
+are in the Music dock (section 7). The pads and controls above are unchanged.
 
 Below it, "Set-up" opens the tabs (the panel remembers if it is open):
   Set       pick a set; New / Duplicate / Rename / Delete / Save /
@@ -106,14 +105,12 @@ Below it, "Set-up" opens the tabs (the panel remembers if it is open):
             Keep brightness (see section 4).
   Changes   when palettes change (every drop, every N phrases, random,
             manual), order (list or shuffle), crossfade, breakdown palette.
-  Director  enabled, and the lock behaviours (including the drop colour
-            cycle): random off, off on breakdown, off on drop, breathing,
-            colour rotation, seed. The audio settings (audio source,
-            fallback BPM, phrase length, Input gain, Kick sensitivity)
-            are in the Music dock (section 7).
+  Director  enabled, lock fade, and the lock behaviours (including the drop
+            colour cycle): random off, off on breakdown, off on drop,
+            breathing, colour rotation, seed. No audio settings here: the
+            audio source, fallback BPM, phrase length, Input gain and Kick
+            sensitivity are in the Music dock (section 7).
   Log       the Director's full decision log.
-
-<!-- TODO(verify): whether the Director tab keeps any audio settings as well in 1.2.0, or only the lock behaviours -->
 
 Drop colour cycle (Director tab, lock behaviours): when the drop lands
 after a breakdown, the Director sometimes flashes through the palettes
@@ -201,7 +198,17 @@ PANIC holds the lock on with the live palette and pauses the Director.
 Press PANIC again (or Pause / resume, F15) to release it: the Director
 runs again and Force on / Force off are cleared.
 
-<!-- TODO(verify): whether the new 1.2.0 Music dock commands (Phrase is now, Drop now, Force breakdown, Tap tempo, Lock BPM, Nudge) have OBS hotkeys, or are dock buttons only -->
+The Music dock's clock commands have hotkeys too, registered per filter
+like the rest:
+
+  Phrase is now                         F20
+  Drop now                              F21
+  Force breakdown                       F22
+  Tap tempo                             F23
+  Lock BPM                              F24
+  Nudge beat phase back / forward       F9 / F10
+
+The Music dock buttons trigger the same actions.
 
 
 7. The Music dock
@@ -218,27 +225,30 @@ Docks menu > "Music". Everything about hearing the music is here:
                   mark at the kick threshold; the KICK light flashes on
                   every kick the Director hears. See section 5 for
                   troubleshooting.
-  Graph           the last 64 beats: the band is the section, white is the
-                  bass, red ticks are kicks, the bars are phrases, and a
-                  diamond marks a director action (palette change, clip
-                  cut, scene launch).
+  Graph           the last 64 beats: the top strip is the live palette, the
+                  band is the section, the green line is the lock, the ticks
+                  are phrases, and the white line is the bass.
   Audio controls  Audio source, Input gain, Kick sensitivity, Fallback
                   BPM, Phrase length. Same settings as before: an existing
                   scene collection keeps its values.
   Beat matching   Tap tempo, Phrase is now, Lock BPM, Nudge, Force
                   breakdown, Drop now.
 
-  Tap tempo        sets the BPM from your taps.
-  Lock BPM         pins the clock to the current BPM instead of following
-                   the analysis.
-  Nudge            moves the phrase grid a little earlier or later.
+  Tap tempo        sets the BPM from your taps and holds it; two or more
+                   taps inside a few seconds are averaged.
+  Lock BPM         toggles that hold: locks the clock to the running or
+                   tapped BPM instead of following the analysis.
+  "< Nudge"        shifts the beat phase a small step back.
+  "Nudge >"        shifts the beat phase a small step forward.
+                   (two arrow buttons, no numeric field.)
   Phrase is now    re-anchors the phrase and bar to this beat, for a grid
                    that is off by a bar.
   Force breakdown  switches the section to BREAKDOWN now. Clip Director
                    and Synesthesia follow, because they follow the clock.
-  Drop now         switches the section to DROP now.
+  Drop now         switches the section to DROP on the next beat.
 
-<!-- TODO(verify): exact 1.2.0 labels and layout of the Music dock (Nudge arrows vs value, tap tempo averaging, whether Force breakdown / Drop now sit with the other buttons), and whether the graph markers ship in 1.2.0 -->
+The buttons sit in a grid: Tap tempo, Phrase is now and Lock BPM; then
+"< Nudge", "Nudge >" and Force breakdown; then Drop now on its own row.
 
 
 8. Uninstall

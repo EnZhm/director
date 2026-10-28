@@ -56,9 +56,11 @@ Step-by-step install, first run, troubleshooting and uninstall:
 ## The Palette Director dock
 
 Open it from Docks > "Palette Director". The top strip always shows what the Director is
-doing: the filter it controls, the lock state, the live palette and a one-line summary
-(for example `Live: Neon Grid - next: Outrun on the next drop - lock ON`), plus
-Force off / Force on / Pause / Prev / Next / Rotate colours / PANIC.
+doing: the filter it controls, a section chip (GROOVE / BREAKDOWN / DROP), the lock state,
+the director state, Coverage and a one-line summary (for example
+`Live: Neon Grid - next: Outrun on the next drop - lock ON`), then the controls Force off /
+Force on / Pause / Prev / Next / Rotate colours / PANIC. The BPM, confidence, beat lights,
+the meter and the 64-beat timeline live in the Music dock.
 
 Below it, Set-up opens the tabs:
 
@@ -81,20 +83,24 @@ audio settings keys are used as before, so an existing scene collection keeps it
 | Clock | Instance picker (the same filter list as the Palette Director dock), BPM, confidence, phrase.bar.beat, section and how long it has held |
 | Beat lights | One per beat in the bar |
 | Meter | LEVEL after Input gain (CLIP above -1 dBFS) and BASS with the kick threshold marked; the kick lamp flashes on each detected kick |
-| Graph | The last 64 beats: section band, white = bass, red ticks = kicks, bars = phrases, diamonds = director actions (palette change, clip cut, scene launch) |
+| Graph | The last 64 beats: the live palette as the top strip, the section as a coloured band, the lock as a green line, phrase ticks, and the bass as a white line |
 | Audio controls | Audio source, Input gain, Kick sensitivity, Fallback BPM, Phrase length |
-| Beat matching | Tap tempo, Phrase is now, Lock BPM, Nudge, Force breakdown, Drop now |
+| Beat matching | Tap tempo, Phrase is now, Lock BPM, `< Nudge` / `Nudge >`, Force breakdown, Drop now |
 
 | Button | What it does |
 |---|---|
-| Tap tempo | Sets the BPM from taps; four or more taps are averaged |
-| Lock BPM | Pins the clock to the current BPM instead of following the analysis |
-| Nudge | Moves the phrase grid a little earlier or later |
+| Tap tempo | Sets the BPM from your taps and holds it; two or more taps inside a few seconds are averaged |
+| Lock BPM | Toggles the tempo hold: locks the clock to the running (or tapped) BPM instead of following the analysis, and toggles it off again |
+| Nudge | Shifts the beat phase a small step earlier (`< Nudge`) or later (`Nudge >`) |
 | Phrase is now | Re-anchors the phrase and bar to this beat (fixes a grid that is off by a bar) |
 | Force breakdown | Switches the section to BREAKDOWN now; Clip Director and Synesthesia follow through the clock |
-| Drop now | Switches the section to DROP now, on the next downbeat |
+| Drop now | Switches the section to DROP, on the next beat |
 
-<!-- TODO(verify): exact labels/behaviour at 1.2.0: whether Nudge has a numeric field as well as arrows, and whether Lock BPM and Tap tempo are one row or two; confirm "for N beats" wording for the section line -->
+The beat-matching controls sit in a grid: **Tap tempo**, **Phrase is now** and **Lock BPM**
+on the top row; **`< Nudge`**, **`Nudge >`** and **Force breakdown** below them; **Drop
+now** on its own row. Nudge is the two arrow buttons only, with no numeric field. Every one
+of these has a matching hotkey (see [Hotkeys](#hotkeys)), and the Music dock buttons and the
+hotkeys do the same thing.
 
 ## Hotkeys
 
@@ -111,11 +117,19 @@ with the filter name in brackets.
 | Next palette | F18 |
 | Previous palette | F19 |
 | Palette 1-8 go live | Ctrl+1 ... Ctrl+8 |
+| Phrase is now | F20 |
+| Drop now | F21 |
+| Force breakdown | F22 |
+| Tap tempo | F23 |
+| Lock BPM | F24 |
+| Nudge beat phase back | F9 |
+| Nudge beat phase forward | F10 |
 
 Palettes 9-16 have no hotkeys: tap their pads in the Palette Director dock, or use
 Next / Previous palette.
 
-<!-- TODO(verify): whether the new 1.2.0 Music dock commands (Phrase is now, Drop now, Force breakdown, tap tempo, Lock BPM, Nudge) get OBS hotkey bindings or stay dock buttons; if they do, add them here -->
+The last seven rows are the Music dock's clock commands; they are registered per filter
+like the rest, and the dock buttons trigger the same action.
 
 ## Install your own set
 
@@ -247,9 +261,8 @@ Notes:
 
 ## Build from source
 
-The project is an [OBS plugin template](https://github.com/obsproject/obs-plugintemplate)
-layout: `buildspec.json` names the plugin, its version and the dependency versions, and
-`CMakePresets.json` holds the presets.
+The project is an OBS plugin template layout: `buildspec.json` names the plugin, its
+version and the dependency versions, and `CMakePresets.json` holds the presets.
 
 | Requirement | Version |
 |---|---|
