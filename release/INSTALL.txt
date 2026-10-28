@@ -1,5 +1,9 @@
-Palette Director 1.0.1 for OBS Studio 32.2.x (Windows x64)
+Palette Director 1.1.0 for OBS Studio 32.2.x (Windows x64)
 ==========================================================
+
+New in 1.1.0: a read-only beat clock for other plugins. Clip Director uses
+it to cut clips on the same beat grid as the palettes. Nothing else
+changed: the Director makes exactly the same decisions as in 1.0.1.
 
 New in 1.0.1: PANIC is a toggle (press it again, or Resume, to release),
 an Input gain and a Kick sensitivity control, an audio meter in the
@@ -23,7 +27,7 @@ It is set-and-forget: set it up once in the panel, then leave it running.
 1. Close OBS.
 2. If an older Palette Director is installed, delete the folder
      C:\ProgramData\obs-studio\plugins\palette-director
-3. Unzip palette-director-1.0.1-windows-x64.zip and copy the folder
+3. Unzip palette-director-1.1.0-windows-x64.zip and copy the folder
    "palette-director" into
      C:\ProgramData\obs-studio\plugins\
    so that these files exist:
@@ -32,7 +36,7 @@ It is set-and-forget: set it up once in the panel, then leave it running.
      C:\ProgramData\obs-studio\plugins\palette-director\data\locale\en-US.ini
      C:\ProgramData\obs-studio\plugins\palette-director\data\sets\neon-default.json
 4. Start OBS 32.2.x. Help > Log Files > View Current Log should show
-     [palette-director] plugin loaded successfully (version 1.0.1)
+     [palette-director] plugin loaded successfully (version 1.1.0)
    If it does not, check the folder layout above.
 
 
