@@ -173,3 +173,26 @@ TEST_CASE("v1.2 nudge back shifts the beat phase")
 	CHECK(b1 - b0 > -0.50);
 	CHECK(has_detail(d.events(), "beat phase back"));
 }
+
+TEST_CASE("v1.2 bpm_locked in the snapshot follows every Lock BPM toggle (dock button state)")
+{
+	pd::SetFile s = pdtest::make_set(2);
+	pd::Director d(s);
+	pdtest::feed(d, std::vector<float>(44100, 0.0f), 44100);
+	CHECK_FALSE(d.snapshot().bpm_locked);
+
+	// the dock button, the hotkey and a MIDI mapping all arrive as the same queued command
+	d.push_command(pd::Command::LockBpm);
+	pdtest::feed(d, std::vector<float>(4410, 0.0f), 44100);
+	CHECK(d.snapshot().bpm_locked);
+	d.push_command(pd::Command::LockBpm);
+	pdtest::feed(d, std::vector<float>(4410, 0.0f), 44100);
+	CHECK_FALSE(d.snapshot().bpm_locked);
+
+	// a tap sets and holds the tempo, so the button lights without a Lock press
+	for (int i = 0; i < 3; i++) {
+		d.push_command(pd::Command::TapTempo);
+		pdtest::feed(d, std::vector<float>(22050, 0.0f), 44100);
+	}
+	CHECK(d.snapshot().bpm_locked);
+}

@@ -333,6 +333,7 @@ struct Director::Impl {
 		st.kick_threshold = kick_thr_;
 		st.kicks = kicks_;
 		st.drop_cycle = scheduler_.drop_cycle_active();
+		st.bpm_locked = tracker_.locked();
 		return st;
 	}
 

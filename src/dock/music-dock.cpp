@@ -303,10 +303,8 @@ protected:
 
 		QObject::connect(bTap, &QPushButton::clicked, this, [this] { send(PD_CMD_TAP_TEMPO); });
 		QObject::connect(bPhrase, &QPushButton::clicked, this, [this] { send(PD_CMD_PHRASE_NOW); });
-		QObject::connect(bLock, &QPushButton::clicked, this, [this] {
-			bpm_locked = !bpm_locked;
-			send(PD_CMD_LOCK_BPM);
-		});
+		/* the checked state follows the director in poll(), so hotkey, MIDI and tap toggles show too */
+		QObject::connect(bLock, &QPushButton::clicked, this, [this] { send(PD_CMD_LOCK_BPM); });
 		QObject::connect(bNudgeBack, &QPushButton::clicked, this, [this] { send(PD_CMD_NUDGE_BACK); });
 		QObject::connect(bNudgeFwd, &QPushButton::clicked, this, [this] { send(PD_CMD_NUDGE_FWD); });
 		QObject::connect(bBreakdown, &QPushButton::clicked, this, [this] { send(PD_CMD_FORCE_BREAKDOWN); });
@@ -560,8 +558,8 @@ private:
 							    QString::fromUtf8(view.audio_name.c_str()),
 							    view.audio_attached ? QString() : QString(" (not found)")));
 
-		if (bLock->isChecked() != bpm_locked)
-			bLock->setChecked(bpm_locked);
+		if (bLock->isChecked() != st.bpm_locked)
+			bLock->setChecked(st.bpm_locked);
 	}
 
 	/* widgets */
@@ -584,7 +582,6 @@ private:
 	struct pl_set model;
 	bool have_model = false;
 	bool filling = false, rebuilding = false;
-	bool bpm_locked = false;
 	QString audio_setting;
 	uint64_t selected = 0, want_select = 0;
 	std::string inst_sig;
