@@ -64,9 +64,9 @@ A minimal working rig, in order:
      C:\ProgramData\obs-studio\plugins\palette-director\data\sets\neon-default.json
    the set is copied into your set folder and appears in the Set list.
 4. Palette Director dock: Docks menu > "Palette Director". The top strip shows the
-   filter, the section (GROOVE / BREAKDOWN / DROP), the lock state, BPM, pads and
-   the last 64 beats. Set-up opens the tabs (Set, Palettes, Look, Changes, Director,
-   Log).
+   filter, a section chip (GROOVE / BREAKDOWN / DROP), the lock state, Coverage and
+   the palette pads; BPM, confidence and the last 64 beats are in the Music dock.
+   Set-up opens the tabs (Set, Palettes, Look, Changes, Director, Log).
 5. Audio: make sure the DJ mix is an OBS audio source (for example an Audio Input
    Capture named "Mixer"), then pick it in the Music dock > Audio source. Set the
    Fallback BPM for silent feeds. The BPM, the beat lights and the section should
