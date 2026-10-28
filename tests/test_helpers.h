@@ -110,4 +110,21 @@ inline std::string summarize(const std::vector<pd::Event> &evs)
 	return os.str();
 }
 
+// FNV-1a 64 of the summary: a compact golden digest. The Director's event log must stay
+// byte-identical for a given feed/set whenever no command from v1.2 is sent.
+inline uint64_t fnv1a64(const std::string &s)
+{
+	uint64_t h = 1469598103934665603ull;
+	for (unsigned char c : s) {
+		h ^= c;
+		h *= 1099511628211ull;
+	}
+	return h;
+}
+
+inline uint64_t digest(const std::vector<pd::Event> &evs)
+{
+	return fnv1a64(summarize(evs));
+}
+
 } // namespace pdtest

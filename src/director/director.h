@@ -14,6 +14,9 @@ enum class Section { Groove, Breakdown, Drop };
 enum class ChangeTrigger { Drop, Phrases, Random, Manual };
 enum class ChangeOrder { Sequence, Shuffle };
 
+// v1.2 Music dock: how far one Nudge back / forward shifts the beat phase, in beats.
+constexpr double kNudgeStepBeats = 0.05;
+
 // ---- Config structs (spec 4.2) ----
 struct ColourSettings {
 	float strength = 1.0f;

@@ -171,6 +171,21 @@ const char *cmd_name(int c)
 		return "PANIC (toggle)";
 	case PD_CMD_TOGGLE_PAUSE:
 		return "pause/resume";
+	/* v1.2 Music dock */
+	case PD_CMD_PHRASE_NOW:
+		return "phrase is now";
+	case PD_CMD_DROP_NOW:
+		return "drop now";
+	case PD_CMD_FORCE_BREAKDOWN:
+		return "force breakdown";
+	case PD_CMD_TAP_TEMPO:
+		return "tap tempo";
+	case PD_CMD_LOCK_BPM:
+		return "lock BPM (toggle)";
+	case PD_CMD_NUDGE_BACK:
+		return "nudge back";
+	case PD_CMD_NUDGE_FWD:
+		return "nudge forward";
 	}
 	return "?";
 }
@@ -533,6 +548,28 @@ static void worker_main(pd_host *h)
 				break;
 			case PD_CMD_PANIC:
 				dc = pd::Command::Panic;
+				break;
+			/* v1.2 Music dock clock commands */
+			case PD_CMD_PHRASE_NOW:
+				dc = pd::Command::PhraseNow;
+				break;
+			case PD_CMD_DROP_NOW:
+				dc = pd::Command::DropNow;
+				break;
+			case PD_CMD_FORCE_BREAKDOWN:
+				dc = pd::Command::ForceBreakdown;
+				break;
+			case PD_CMD_TAP_TEMPO:
+				dc = pd::Command::TapTempo;
+				break;
+			case PD_CMD_LOCK_BPM:
+				dc = pd::Command::LockBpm;
+				break;
+			case PD_CMD_NUDGE_BACK:
+				dc = pd::Command::NudgeBack;
+				break;
+			case PD_CMD_NUDGE_FWD:
+				dc = pd::Command::NudgeFwd;
 				break;
 			default:
 				continue;

@@ -51,6 +51,14 @@ enum pd_cmd {
 	PD_CMD_ROTATE_NOW,
 	PD_CMD_PANIC,
 	PD_CMD_TOGGLE_PAUSE, /* host-level: Pause or Resume from the current state */
+	/* v1.2 Music dock clock commands */
+	PD_CMD_PHRASE_NOW,      /* re-anchor the phrase/bar grid so this beat is a phrase downbeat */
+	PD_CMD_DROP_NOW,        /* force section DROP on the next beat */
+	PD_CMD_FORCE_BREAKDOWN, /* force section BREAKDOWN on the next beat */
+	PD_CMD_TAP_TEMPO,       /* BPM from tap times */
+	PD_CMD_LOCK_BPM,        /* toggle: freeze tempo tracking */
+	PD_CMD_NUDGE_BACK,      /* shift the beat phase back a small step */
+	PD_CMD_NUDGE_FWD,       /* shift the beat phase forward a small step */
 };
 
 /* where a command came from (selects the producer queue + log tag) */
