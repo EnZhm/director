@@ -83,6 +83,7 @@ Closing the dock only stops the poll timer; the Director keeps running.
 #include <string>
 #include <vector>
 
+#include "dock-widgets.h"
 #include "palette-lock-filter.h"
 #include "palette-lock-host.h"
 #include "palette-lock-host.hpp"
@@ -90,17 +91,12 @@ Closing the dock only stops the poll timer; the Director keeps running.
 
 namespace {
 
+using namespace pddock;
+
 QColor qc(const struct pl_colour &c)
 {
 	return QColor::fromRgbF(std::clamp(c.r, 0.0f, 1.0f), std::clamp(c.g, 0.0f, 1.0f), std::clamp(c.b, 0.0f, 1.0f));
 }
-
-QString T(const char *key)
-{
-	return QString::fromUtf8(obs_module_text(key));
-}
-
-const QString kDot = QString::fromUtf8("\xC2\xB7");
 
 QString hex_of(const struct pl_colour &c)
 {
@@ -138,19 +134,6 @@ void fill_ramp(QPainter &p, const QRectF &r, const struct pl_palette &pal, doubl
 	path.addRoundedRect(r, radius, radius);
 	p.fillPath(path, g);
 }
-
-/* RAII strong reference to the selected filter source */
-struct SrcRef {
-	obs_source_t *s = nullptr;
-	explicit SrcRef(uint64_t id) : s(id ? pdhost::filter_source(id) : nullptr) {}
-	~SrcRef()
-	{
-		if (s)
-			obs_source_release(s);
-	}
-	SrcRef(const SrcRef &) = delete;
-	SrcRef &operator=(const SrcRef &) = delete;
-};
 
 /* ---- palette pad ---- */
 class PadWidget : public QWidget {
@@ -252,201 +235,6 @@ protected:
 			fill_ramp(p, QRectF(rect()).adjusted(1, 1, -1, -1), pal, 5.0);
 	}
 };
-
-/* ---- 4 beat lights ---- */
-class BeatLights : public QWidget {
-public:
-	explicit BeatLights(QWidget *parent) : QWidget(parent) { setFixedSize(4 * 20, 16); }
-	int on = -1;
-
-protected:
-	void paintEvent(QPaintEvent *) override
-	{
-		QPainter p(this);
-		p.setRenderHint(QPainter::Antialiasing);
-		for (int i = 0; i < 4; i++) {
-			p.setPen(Qt::NoPen);
-			p.setBrush(i == on ? palette().color(QPalette::Highlight) : palette().color(QPalette::Mid));
-			p.drawEllipse(QRectF(i * 20 + 2, 1, 14, 14));
-		}
-	}
-};
-
-/* ---- v1.0.1 audio meter: input level (dBFS after gain, CLIP > -1 dBFS), bass bar with the kick
- * threshold marked, kick light. Fed from the DockView snapshot (copied under the host's view mutex). */
-class AudioMeter : public QWidget {
-public:
-	explicit AudioMeter(QWidget *parent) : QWidget(parent)
-	{
-		setMinimumHeight(34);
-		setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-	}
-	float db = -120.0f, bass = 0.0f, thr = 0.4f;
-	bool clip = false, silent = true;
-	int kick_flash = 0; // frames left to light the kick lamp
-
-protected:
-	void paintEvent(QPaintEvent *) override
-	{
-		QPainter p(this);
-		p.setRenderHint(QPainter::Antialiasing);
-		const QPalette &pl = palette();
-		const double W = width(), lamp = 26.0, lbl = 46.0;
-		const double bw = std::max(40.0, W - lamp - lbl - 10.0);
-		QFont f = font();
-		f.setPointSizeF(std::max(6.0, f.pointSizeF() * 0.8));
-		f.setBold(true);
-		p.setFont(f);
-		p.setPen(pl.color(QPalette::PlaceholderText));
-		p.drawText(QRectF(0, 0, lbl, 15), Qt::AlignLeft | Qt::AlignVCenter, "LEVEL");
-		p.drawText(QRectF(0, 18, lbl, 15), Qt::AlignLeft | Qt::AlignVCenter, "BASS");
-		/* level: -60..0 dBFS */
-		const QRectF lr(lbl, 2, bw, 11);
-		p.fillRect(lr, pl.color(QPalette::Base));
-		const double lv = std::clamp((static_cast<double>(db) + 60.0) / 60.0, 0.0, 1.0);
-		const QColor lc = clip ? QColor(255, 60, 90)
-				       : (db > -6.0f ? QColor(255, 190, 40) : QColor(60, 200, 110));
-		p.fillRect(QRectF(lr.left(), lr.top(), lr.width() * lv, lr.height()), lc);
-		for (int t = -48; t < 0; t += 12) {
-			const double x = lr.left() + lr.width() * (t + 60.0) / 60.0;
-			p.fillRect(QRectF(x, lr.top(), 1, lr.height()), pl.color(QPalette::Mid));
-		}
-		p.setPen(pl.color(QPalette::Text));
-		p.drawText(lr.adjusted(4, -1, -4, 1), Qt::AlignRight | Qt::AlignVCenter,
-			   clip ? QString("CLIP %1 dBFS").arg(db, 0, 'f', 1)
-				: (db <= -119.0f ? QString("no signal") : QString("%1 dBFS").arg(db, 0, 'f', 1)));
-		/* bass bar with the kick threshold */
-		const QRectF br(lbl, 19, bw, 11);
-		p.fillRect(br, pl.color(QPalette::Base));
-		p.fillRect(QRectF(br.left(), br.top(), br.width() * std::clamp(bass, 0.0f, 1.0f), br.height()),
-			   pl.color(QPalette::Highlight));
-		const double tx = br.left() + br.width() * std::clamp(thr, 0.0f, 1.0f);
-		p.fillRect(QRectF(tx - 1, br.top() - 2, 2, br.height() + 4), QColor(255, 60, 90));
-		/* kick light */
-		const QRectF kr(W - lamp + 2, 4, lamp - 6, lamp - 6);
-		p.setPen(QPen(pl.color(QPalette::Mid), 1));
-		p.setBrush(kick_flash > 0 ? QColor(255, 60, 90) : pl.color(QPalette::Base));
-		p.drawEllipse(kr);
-		p.setPen(pl.color(QPalette::PlaceholderText));
-		p.drawText(QRectF(W - lamp - 4, 22, lamp + 4, 12), Qt::AlignCenter, "KICK");
-	}
-};
-
-/* ---- 64-beat timeline (mock drawTimeline) ---- */
-class TimelineWidget : public QWidget {
-public:
-	explicit TimelineWidget(QWidget *parent) : QWidget(parent) { setMinimumHeight(96); }
-
-	std::vector<pdhost::TimelineSample> tl;
-	double now = 0.0;
-	int phrase = 32;
-
-protected:
-	void paintEvent(QPaintEvent *) override
-	{
-		QPainter p(this);
-		p.setRenderHint(QPainter::Antialiasing);
-		const double W = width(), H = height();
-		const QPalette &pl = palette();
-		p.fillRect(rect(), pl.color(QPalette::Base));
-		auto X = [&](double b) {
-			return W - (now - b) / 64.0 * W;
-		};
-		const QColor sec[3] = {QColor(80, 140, 255, 46), QColor(255, 182, 72, 70), QColor(255, 92, 122, 80)};
-		p.setRenderHint(QPainter::Antialiasing, false); // abutting translucent bands: no seams
-		for (size_t i = 0; i < tl.size(); i++) {
-			const int x0 = static_cast<int>(std::floor(X(tl[i].beat)));
-			const int x1 = i + 1 < tl.size() ? static_cast<int>(std::floor(X(tl[i + 1].beat)))
-							 : static_cast<int>(W);
-			if (x1 <= x0)
-				continue;
-			p.fillRect(QRect(x0, 10, x1 - x0, static_cast<int>(H) - 10),
-				   sec[std::clamp(tl[i].section, 0, 2)]);
-			p.fillRect(QRect(x0, 0, x1 - x0, 8), QColor::fromRgbF(tl[i].r, tl[i].g, tl[i].b));
-		}
-		p.setRenderHint(QPainter::Antialiasing, true);
-		QPainterPath bass, mix;
-		for (size_t i = 0; i < tl.size(); i++) {
-			const double x = X(tl[i].beat);
-			const double yb = H - 4 - std::min(1.0f, tl[i].bass) * H * 0.3;
-			const double ym = 16 + (1.0 - tl[i].mix) * (H * 0.5);
-			if (i == 0) {
-				bass.moveTo(x, yb);
-				mix.moveTo(x, ym);
-			} else {
-				bass.lineTo(x, yb);
-				mix.lineTo(x, ym);
-			}
-		}
-		QColor bc = pl.color(QPalette::Text);
-		bc.setAlpha(90);
-		p.setPen(QPen(bc, 1.0));
-		p.drawPath(bass);
-		QColor tc = pl.color(QPalette::Text);
-		tc.setAlpha(140);
-		const int ph = std::max(1, phrase);
-		for (double b = std::ceil((now - 64.0) / ph) * ph; b <= now; b += ph)
-			p.fillRect(QRectF(X(b), 10, 1, H), tc);
-		p.setPen(QPen(pl.color(QPalette::Highlight), 2.0));
-		p.drawPath(mix);
-	}
-};
-
-/* In a scrolling dock, a wheel over a spin box / combo / slider must scroll the dock, not
- * silently change a setting. Such widgets only take the wheel once they have focus. */
-class WheelGuard : public QObject {
-public:
-	using QObject::QObject;
-
-protected:
-	bool eventFilter(QObject *o, QEvent *e) override
-	{
-		if (e->type() == QEvent::Wheel) {
-			auto *w = qobject_cast<QWidget *>(o);
-			if (w && !w->hasFocus()) {
-				e->ignore();
-				return true;
-			}
-		}
-		return QObject::eventFilter(o, e);
-	}
-};
-
-void guard_wheel(QWidget *root, QObject *guard)
-{
-	for (QWidget *w : root->findChildren<QWidget *>()) {
-		if (qobject_cast<QAbstractSpinBox *>(w) || qobject_cast<QComboBox *>(w) ||
-		    qobject_cast<QAbstractSlider *>(w)) {
-			w->setFocusPolicy(Qt::StrongFocus);
-			w->installEventFilter(guard);
-		}
-	}
-}
-
-/* coloured status chip: tinted background over the theme, theme text colour */
-void set_chip(QLabel *l, const QString &text, const QColor &tint)
-{
-	if (l->text() != text)
-		l->setText(text);
-	const QString ss = QString("QLabel{padding:3px 10px;border-radius:10px;font-weight:700;"
-				   "background:rgba(%1,%2,%3,90);border:1px solid rgba(%1,%2,%3,200);}")
-				   .arg(tint.red())
-				   .arg(tint.green())
-				   .arg(tint.blue());
-	if (l->styleSheet() != ss)
-		l->setStyleSheet(ss);
-}
-
-QLabel *help_label(const char *key, QWidget *parent)
-{
-	auto *l = new QLabel(T(key), parent);
-	l->setWordWrap(true);
-	QFont f = l->font();
-	f.setPointSizeF(std::max(6.0, f.pointSizeF() * 0.88));
-	l->setFont(f);
-	l->setForegroundRole(QPalette::PlaceholderText);
-	return l;
-}
 
 /* slider with a live value label; model value = slider / scale */
 struct ValueSlider {
@@ -553,7 +341,8 @@ protected:
 		lv->setSpacing(8);
 		v->addWidget(live_area);
 
-		/* status line */
+		/* one-line status (BPM/conf, section "for N beats", meter and the 64-beat timeline
+		 * moved to the Music dock in v1.2) */
 		auto *statusRow = new QHBoxLayout();
 		secChip = new QLabel(live_area);
 		lockChip = new QLabel(live_area);
@@ -562,23 +351,14 @@ protected:
 		statusRow->addWidget(lockChip);
 		statusRow->addWidget(stateChip);
 		statusRow->addStretch(1);
-		beats = new BeatLights(live_area);
-		statusRow->addWidget(beats);
 		lv->addLayout(statusRow);
 
 		statusText = new QLabel(live_area);
 		QFont sf = statusText->font();
-		sf.setPointSizeF(sf.pointSizeF() * 1.15);
 		sf.setBold(true);
 		statusText->setFont(sf);
-		statusText->setWordWrap(true);
+		statusText->setWordWrap(false);
 		lv->addWidget(statusText);
-		sAudio = new QLabel(live_area);
-		sAudio->setForegroundRole(QPalette::PlaceholderText);
-		lv->addWidget(sAudio);
-		meter = new AudioMeter(live_area);
-		meter->setToolTip(T("Dock.MeterHelp"));
-		lv->addWidget(meter);
 
 		/* pads */
 		auto *ph = new QLabel(T("Dock.PalettesTap"), live_area);
@@ -635,13 +415,6 @@ protected:
 		QObject::connect(bNext, &QPushButton::clicked, this, [this] { send(PD_CMD_NEXT); });
 		QObject::connect(bRotate, &QPushButton::clicked, this, [this] { send(PD_CMD_ROTATE_NOW); });
 		QObject::connect(bPanic, &QPushButton::clicked, this, [this] { send(PD_CMD_PANIC); });
-
-		timeline = new TimelineWidget(live_area);
-		lv->addWidget(timeline);
-		auto *legend = new QLabel(T("Dock.TimelineLegend"), live_area);
-		legend->setForegroundRole(QPalette::PlaceholderText);
-		legend->setWordWrap(true);
-		lv->addWidget(legend);
 
 		nowLbl = new QLabel(live_area);
 		nowLbl->setWordWrap(true);
@@ -1103,34 +876,8 @@ protected:
 		auto *w = new QWidget(tabs);
 		auto *form = new QFormLayout(w);
 		drEnabled = add_check(form, w, "Dock.DirEnabled", &pl_set::dir_enabled, "director enabled");
-		drAudio = new QComboBox(w);
-		form->addRow(T("AudioSource"), drAudio);
-		QObject::connect(drAudio, &QComboBox::activated, this, [this](int i) {
-			SrcRef r(selected);
-			if (!r.s)
-				return;
-			audio_setting = drAudio->itemData(i).toString();
-			palette_lock_set_audio(r.s, audio_setting.toUtf8().constData());
-		});
-		drBpm = new QSpinBox(w);
-		drBpm->setRange(60, 200);
-		form->addRow(T("FallbackBpm"), drBpm);
-		QObject::connect(drBpm, &QSpinBox::valueChanged, this, [this](int n) {
-			if (filling)
-				return;
-			struct pl_set ns = model;
-			ns.fallback_bpm = static_cast<float>(n);
-			commit(ns, -1, QString("fallback BPM -> %1").arg(n));
-		});
-		drPhrase = new QComboBox(w);
-		drPhrase->addItem("16 beats", 16);
-		drPhrase->addItem("32 beats", 32);
-		form->addRow(T("PhraseLength"), drPhrase);
-		QObject::connect(drPhrase, &QComboBox::activated, this, [this](int i) {
-			struct pl_set ns = model;
-			ns.phrase_beats = drPhrase->itemData(i).toInt();
-			commit(ns, -1, "phrase length -> " + drPhrase->itemText(i));
-		});
+		/* Audio source, fallback BPM, phrase length, input gain and kick sensitivity moved
+		 * to the Music dock in v1.2 (same settings keys, same write path). */
 		drFade = new QDoubleSpinBox(w);
 		drFade->setRange(0.25, 8.0);
 		drFade->setSingleStep(0.25);
@@ -1142,15 +889,7 @@ protected:
 			ns.lock_fade_beats = static_cast<float>(b);
 			commit(ns, -1, QString("lock fade -> %1 beats").arg(b));
 		});
-		/* v1.0.1 audio sensitivity */
-		drGain = make_slider(
-			form, w, "InputGain", "InputGain.Help", -24, 48, false,
-			[](struct pl_set &s, double v) { s.input_gain_db = static_cast<float>(v); }, "input gain dB",
-			2.0);
-		drSens = make_slider(
-			form, w, "KickSensitivity", "KickSensitivity.Help", 0, 100, true,
-			[](struct pl_set &s, double v) { s.kick_sensitivity = static_cast<float>(v); },
-			"kick sensitivity");
+		/* v1.0.1 audio sensitivity moved to the Music dock in v1.2 */
 
 		auto *hdr = new QLabel(T("LockBehaviours"), w);
 		QFont hf = hdr->font();
@@ -1383,14 +1122,10 @@ private:
 		int edit = 0, live = 0;
 		if (!palette_lock_read_set(r.s, &m, &edit, &live))
 			return;
-		const char *a = palette_lock_audio(r.s);
-		const QString audio = QString::fromUtf8(a ? a : "");
-		bfree((void *)a);
-		if (!force && have_model && memcmp(&m, &model, sizeof(m)) == 0 && audio == audio_setting)
+		if (!force && have_model && memcmp(&m, &model, sizeof(m)) == 0)
 			return;
 		model = m;
 		have_model = true;
-		audio_setting = audio;
 		fill_editors();
 	}
 
@@ -1611,8 +1346,6 @@ private:
 		set_combo_data(chBd, QString::fromUtf8(bd >= 0 ? s.breakdown : ""));
 		/* director */
 		set_check(drEnabled, s.dir_enabled);
-		set_spin(drBpm, static_cast<int>(std::lround(s.fallback_bpm)));
-		set_combo_data(drPhrase, s.phrase_beats);
 		set_dspin(drFade, s.lock_fade_beats);
 		set_check(drRandom, s.random_off);
 		set_slider(drRandChance, s.random_chance);
@@ -1635,11 +1368,8 @@ private:
 		set_row_visible(drCycleBars, s.drop_cycle);
 		set_row_visible(drCycleRate, s.drop_cycle);
 		set_slider(drBreath, s.breathing);
-		set_slider(drGain, s.input_gain_db);
-		set_slider(drSens, s.kick_sensitivity);
 		set_check(drRotation, s.rotation);
 		set_spin(drSeed, static_cast<int>(s.seed));
-		refresh_audio_list();
 		filling = false;
 	}
 
@@ -1755,39 +1485,6 @@ private:
 			setSel->setCurrentText(QString::fromUtf8(model.name));
 		setSel->blockSignals(false);
 		setBtns[3]->setEnabled(names.size() > 1);
-	}
-
-	static bool enum_audio(void *param, obs_source_t *src)
-	{
-		auto *out = static_cast<QStringList *>(param);
-		if ((obs_source_get_output_flags(src) & OBS_SOURCE_AUDIO) == 0)
-			return true;
-		const char *n = obs_source_get_name(src);
-		if (n && n[0])
-			*out << QString::fromUtf8(n);
-		return true;
-	}
-
-	void refresh_audio_list()
-	{
-		QStringList names;
-		obs_enum_sources(enum_audio, &names);
-		if (!audio_setting.isEmpty() && !names.contains(audio_setting))
-			names << audio_setting;
-		QStringList cur;
-		for (int i = 1; i < drAudio->count(); i++)
-			cur << drAudio->itemData(i).toString();
-		drAudio->blockSignals(true);
-		if (cur != names || drAudio->count() == 0) {
-			drAudio->clear();
-			drAudio->addItem(T("AudioSource.None"), QString());
-			for (const QString &n : names)
-				drAudio->addItem(n, n);
-		}
-		const int i = drAudio->findData(audio_setting);
-		if (i >= 0 && drAudio->currentIndex() != i)
-			drAudio->setCurrentIndex(i);
-		drAudio->blockSignals(false);
 	}
 
 	/* ---------------------------------------------------------------- live view */
@@ -1939,42 +1636,17 @@ private:
 			stc = QColor(80, 140, 255);
 		}
 		set_chip(stateChip, state, stc);
-		beats->on = st.beat_frac < 0.35f ? static_cast<int>(st.beat % 4) : -1;
-		beats->update();
-
-		const int pb = set.phrase_beats == 16 ? 16 : 32;
-		const double b = view.beats;
-		const QString bpm = st.silent ? QString("%1 BPM (fixed)").arg(st.bpm, 0, 'f', 0)
-					      : QString("%1 BPM (%2%)")
-							.arg(st.bpm, 0, 'f', 1)
-							.arg(std::lround(st.confidence * 100.0f));
-		statusText->setText(QString("%1  %2  bar %3/%4 %5 phrase %6  %7  coverage %8%")
-					    .arg(bpm, kDot)
-					    .arg(static_cast<int>(std::fmod(b, pb) / 4.0) + 1)
-					    .arg(pb / 4)
+		/* one-line status: what the Palette Director itself is doing (BPM / section / meter /
+		 * timeline are in the Music dock) */
+		static const char *trigWord[4] = {"changes on every drop", "changes every N phrases",
+						  "changes randomly per phrase", "manual changes only"};
+		const int ti = std::clamp(set.trigger, 0, 3);
+		statusText->setText(QString("coverage %1%  %2  %3  %2  %4  %2  cooldown %5")
+					    .arg(std::lround(set.strength * 100.0f))
 					    .arg(kDot)
-					    .arg(static_cast<long long>(b / pb) + 1)
-					    .arg(kDot)
-					    .arg(std::lround(set.strength * 100.0f)));
-		sAudio->setText(view.audio_name.empty()
-					? T("Dock.NoAudio")
-					: QString("%1: %2%3   %4 cooldown %5")
-						  .arg(T("AudioSource"), QString::fromUtf8(view.audio_name.c_str()),
-						       view.audio_attached ? QString() : QString(" (not found)"), kDot)
-						  .arg(st.cooldown_phrases_left));
-		/* v1.0.1 audio meter */
-		meter->db = st.input_db;
-		meter->clip = st.clip;
-		meter->bass = st.bass_level;
-		meter->thr = st.kick_threshold;
-		meter->silent = st.silent;
-		if (st.kicks != kicks_seen) {
-			kicks_seen = st.kicks;
-			meter->kick_flash = 4; // ~130 ms at 30 Hz
-		} else if (meter->kick_flash > 0) {
-			meter->kick_flash--;
-		}
-		meter->update();
+					    .arg(trigWord[ti])
+					    .arg(set.drop_cycle ? QString("drop cycle on") : QString("drop cycle off"))
+					    .arg(st.cooldown_phrases_left));
 		bForceOn->setChecked(st.forced_on);
 		bForceOn->setText(st.forced_on ? T("Dock.ForceOnActive") : T("Dock.ForceOn"));
 		bPause->setChecked(st.paused);
@@ -2016,12 +1688,6 @@ private:
 			pw->update();
 		}
 
-		/* timeline */
-		timeline->tl = view.timeline;
-		timeline->now = view.beats;
-		timeline->phrase = pb;
-		timeline->update();
-
 		/* "now" sentence */
 		const QString liveName = (st.live_palette >= 0 && st.live_palette < set.n_palettes)
 						 ? QString::fromUtf8(set.palettes[st.live_palette].name)
@@ -2062,13 +1728,11 @@ private:
 	QWidget *body = nullptr, *live_area = nullptr;
 	QComboBox *picker = nullptr;
 	QLabel *secChip = nullptr, *lockChip = nullptr, *stateChip = nullptr;
-	BeatLights *beats = nullptr;
-	QLabel *statusText = nullptr, *sAudio = nullptr, *empty = nullptr, *nowLbl = nullptr;
+	QLabel *statusText = nullptr, *empty = nullptr, *nowLbl = nullptr;
 	QGridLayout *padGrid = nullptr;
 	PadWidget *pads[PL_MAX_PALETTES] = {};
 	QPushButton *bForceOff = nullptr, *bForceOn = nullptr, *bPause = nullptr, *bPrev = nullptr, *bNext = nullptr,
 		    *bRotate = nullptr, *bPanic = nullptr;
-	TimelineWidget *timeline = nullptr;
 	QToolButton *tabsToggle = nullptr;
 	QTabWidget *tabs = nullptr;
 	/* set tab */
@@ -2094,18 +1758,15 @@ private:
 	/* director tab */
 	QCheckBox *drEnabled = nullptr, *drRandom = nullptr, *drOffBd = nullptr, *drOffDrop = nullptr,
 		  *drRotation = nullptr;
-	QComboBox *drAudio = nullptr, *drPhrase = nullptr;
-	QSpinBox *drBpm = nullptr, *drBarsMin = nullptr, *drBarsMax = nullptr, *drCool = nullptr, *drDropBars = nullptr,
+	QSpinBox *drBarsMin = nullptr, *drBarsMax = nullptr, *drCool = nullptr, *drDropBars = nullptr,
 		 *drSeed = nullptr;
 	QDoubleSpinBox *drFade = nullptr;
-	ValueSlider drRandChance, drBreath, drGain, drSens, drCycleChance;
+	ValueSlider drRandChance, drBreath, drCycleChance;
 	QCheckBox *drCycle = nullptr;
 	QSpinBox *drCycleBars = nullptr;
 	QComboBox *drCycleRate = nullptr;
 	int cycle_live_seen = -1;
 	int cycle_flash = 0;
-	AudioMeter *meter = nullptr;
-	uint32_t kicks_seen = 0;
 	/* log tab */
 	QPlainTextEdit *logText = nullptr;
 	QStringList lines;
@@ -2115,7 +1776,6 @@ private:
 	pdhost::DockView view;
 	struct pl_set model;
 	bool have_model = false;
-	QString audio_setting;
 	uint64_t selected = 0, want_select = 0;
 	uint64_t log_cursor = 0;
 	std::string inst_sig, pads_sig, pal_list_sig, sw_sig, bd_sig;

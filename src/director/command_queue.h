@@ -15,7 +15,15 @@ enum class Command {
 	Prev,
 	GoLive, // palette_index selects the target palette
 	RotateNow,
-	Panic // lock on + director paused + palette held + rotation reset
+	Panic, // lock on + director paused + palette held + rotation reset
+	// v1.2 (Music dock). Clock commands: they touch the beat grid / section, not the palettes.
+	PhraseNow,      // re-anchor the phrase/bar grid so the current beat is a phrase downbeat
+	DropNow,        // force section DROP on the next beat
+	ForceBreakdown, // force section BREAKDOWN on the next beat
+	TapTempo,       // tempo from tap times
+	LockBpm,        // toggle: freeze tempo tracking (a tap sets and holds the tempo)
+	NudgeBack,      // shift the beat phase back a small step
+	NudgeFwd        // shift the beat phase forward a small step
 };
 
 struct CommandMsg {

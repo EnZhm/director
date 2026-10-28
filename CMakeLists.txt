@@ -56,7 +56,9 @@ target_sources(
     src/director/beat_tracker.cpp
     src/director/section_state.cpp
     src/director/scheduler.cpp
+    src/dock/dock-widgets.cpp
     src/dock/palette-director-dock.cpp
+    src/dock/music-dock.cpp
 )
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE src)
 

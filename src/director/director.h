@@ -14,6 +14,9 @@ enum class Section { Groove, Breakdown, Drop };
 enum class ChangeTrigger { Drop, Phrases, Random, Manual };
 enum class ChangeOrder { Sequence, Shuffle };
 
+// v1.2 Music dock: how far one Nudge back / forward shifts the beat phase, in beats.
+constexpr double kNudgeStepBeats = 0.05;
+
 // ---- Config structs (spec 4.2) ----
 struct ColourSettings {
 	float strength = 1.0f;
@@ -108,6 +111,7 @@ struct DirectorState {
 	float kick_threshold = 0.4f; // the kick threshold on the same scale (marker on the bass bar)
 	uint32_t kicks = 0;          // detected kick count (the dock flashes its kick light on change)
 	bool drop_cycle = false;     // v1.0.1: a drop colour cycle is running (lock held on)
+	bool bpm_locked = false;     // v1.2: tempo held (Lock BPM or a tap); the dock button follows it
 };
 
 // ---- Director decision log (feeds the dock log in P5 and the offline tests) ----

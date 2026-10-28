@@ -30,6 +30,47 @@ void BeatTracker::reset()
 	onset_buf_.clear();
 	recent_max_.clear();
 	onset_peak_ = 0.0;
+	taps_.clear();
+	have_tap_ = false;
+	tapped_bpm_ = 0.0;
+	locked_ = false;
+	frozen_bpm_ = 0.0;
+}
+
+void BeatTracker::tap(double now_s)
+{
+	taps_.push_back(now_s);
+	while (!taps_.empty() && now_s - taps_.front() > 3.0)
+		taps_.pop_front();
+	while (taps_.size() > 8)
+		taps_.pop_front();
+	if (taps_.size() < 2)
+		return;
+	const double span = taps_.back() - taps_.front();
+	if (span <= 0.0)
+		return;
+	const double bpm = 60.0 * static_cast<double>(taps_.size() - 1) / span;
+	if (bpm < 40.0 || bpm > 300.0)
+		return;
+	tapped_bpm_ = bpm;
+	have_tap_ = true;
+	/* a tap sets the tempo and holds it; Lock BPM toggles the hold off again */
+	locked_ = true;
+	frozen_bpm_ = bpm;
+}
+
+void BeatTracker::set_lock(bool locked)
+{
+	locked_ = locked;
+	if (locked_)
+		frozen_bpm_ = effective_bpm_;
+}
+
+void BeatTracker::nudge(double beats)
+{
+	beats_ += beats;
+	if (beats_ < 0.0)
+		beats_ = 0.0;
 }
 
 double BeatTracker::autocorr(std::size_t lag) const
@@ -104,6 +145,9 @@ void BeatTracker::process(double onset, bool silent, double dt)
 	} else {
 		effective_bpm_ = fallback_bpm_;
 	}
+	// v1.2: Lock BPM freezes whatever tempo the grid was running at (a tap sets it).
+	if (locked_)
+		effective_bpm_ = frozen_bpm_;
 
 	beats_ += dt * effective_bpm_ / 60.0;
 

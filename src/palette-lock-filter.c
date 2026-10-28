@@ -38,7 +38,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>/
 #define S_NCOLOURS "palette.%d.n_colours"
 #define S_COLOUR "palette.%d.colour.%d"
 
-#define PD_N_NAMED_HOTKEYS 7
+#define PD_N_NAMED_HOTKEYS 14
 
 struct palette_lock_filter {
 	obs_source_t *context;
@@ -248,6 +248,14 @@ static const struct {
 	{"PaletteDirector.Panic", "HotkeyPanic", PD_CMD_PANIC, OBS_KEY_F17},
 	{"PaletteDirector.Next", "HotkeyNext", PD_CMD_NEXT, OBS_KEY_F18},
 	{"PaletteDirector.Prev", "HotkeyPrev", PD_CMD_PREV, OBS_KEY_F19},
+	/* v1.2 Music dock: stable names for name-based triggering (e.g. a MIDI front-end) */
+	{"pd_phrase_now", "HotkeyPhraseNow", PD_CMD_PHRASE_NOW, OBS_KEY_F20},
+	{"pd_drop_now", "HotkeyDropNow", PD_CMD_DROP_NOW, OBS_KEY_F21},
+	{"pd_force_breakdown", "HotkeyForceBreakdown", PD_CMD_FORCE_BREAKDOWN, OBS_KEY_F22},
+	{"pd_tap_tempo", "HotkeyTapTempo", PD_CMD_TAP_TEMPO, OBS_KEY_F23},
+	{"pd_lock_bpm", "HotkeyLockBpm", PD_CMD_LOCK_BPM, OBS_KEY_F24},
+	{"pd_nudge_back", "HotkeyNudgeBack", PD_CMD_NUDGE_BACK, OBS_KEY_F9},
+	{"pd_nudge_fwd", "HotkeyNudgeFwd", PD_CMD_NUDGE_FWD, OBS_KEY_F10},
 };
 
 static void hk_named(void *data, obs_hotkey_id id, obs_hotkey_t *hotkey, bool pressed)

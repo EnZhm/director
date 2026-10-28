@@ -16,6 +16,16 @@ public:
 	// Call once per beat. `bass_present` = a kick/bass hit occurred this beat.
 	Section update(uint64_t beat, bool bass_present, int phrase_beats);
 
+	// v1.2 Music dock: force a section now (a queue-fed command), keeping the internal
+	// timers consistent so normal detection carries on from here (a forced DROP lasts one
+	// phrase, as a detected one does; a forced BREAKDOWN waits for the drop as usual).
+	void force(Section s, uint64_t beat)
+	{
+		cur_ = s;
+		last_bass_beat_ = beat;
+		drop_start_ = (s == Section::Drop) ? static_cast<int64_t>(beat) : -1;
+	}
+
 	Section current() const { return cur_; }
 	// Silent feed: no information about bass, so don't let the breakdown timer run.
 	void hold(uint64_t beat) { last_bass_beat_ = beat; }

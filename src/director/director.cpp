@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <utility>
 
 #include "analysis.h"
@@ -130,6 +131,9 @@ struct Director::Impl {
 		phrase_inited_ = false;
 		cur_section_ = Section::Groove;
 		sample_rate_ = 0;
+		phrase_offset_ = 0;
+		pending_section_ = -1;
+		clock_s_ = 0.0;
 		CommandMsg m;
 		while (queue_.pop(m)) {
 		}
@@ -138,12 +142,22 @@ struct Director::Impl {
 	void append_events(const std::vector<Event> &evs)
 	{
 		for (Event e : evs) {
-			e.phrase = e.beat / static_cast<uint64_t>(phrase_beats_);
+			e.phrase = (e.beat + phrase_offset_) / static_cast<uint64_t>(phrase_beats_);
 			if (drain_enabled_)
 				out_.push_back(e);
 			if (keep_history_)
 				log_.push_back(std::move(e));
 		}
+	}
+
+	// one command-trace event (v1.2 clock commands share this shape)
+	void append_note(uint64_t beat, const std::string &detail)
+	{
+		Event e;
+		e.type = Event::Type::Command;
+		e.beat = beat;
+		e.detail = detail;
+		append_events({e});
 	}
 
 	void update(const SetFile &s, int live)
@@ -177,6 +191,50 @@ struct Director::Impl {
 		CommandMsg m;
 		while (queue_.pop(m)) {
 			const uint64_t beat = static_cast<uint64_t>(std::floor(tracker_.beats()));
+			// v1.2 Music dock: clock commands touch the beat grid / section, not the palettes.
+			switch (m.cmd) {
+			case Command::PhraseNow: {
+				const uint64_t pb = static_cast<uint64_t>(phrase_beats_);
+				const uint64_t rem = beat % pb;
+				phrase_offset_ = rem == 0 ? 0 : pb - rem;
+				last_phrase_ = (beat + phrase_offset_) / pb;
+				phrase_inited_ = true;
+				append_note(beat, "phrase re-anchored: phrase starts now");
+				continue;
+			}
+			case Command::DropNow:
+				pending_section_ = static_cast<int>(Section::Drop);
+				append_note(beat, "drop now: section -> DROP on the next beat");
+				continue;
+			case Command::ForceBreakdown:
+				pending_section_ = static_cast<int>(Section::Breakdown);
+				append_note(beat, "force breakdown: section -> BREAKDOWN on the next beat");
+				continue;
+			case Command::TapTempo: {
+				tracker_.tap(clock_s_);
+				char buf[48];
+				std::snprintf(buf, sizeof(buf), "tap tempo -> %.1f BPM", tracker_.tapped_bpm());
+				append_note(beat, buf);
+				continue;
+			}
+			case Command::LockBpm: {
+				const bool lk = !tracker_.locked();
+				tracker_.set_lock(lk);
+				append_note(beat, lk ? "BPM locked: tempo tracking frozen"
+						     : "BPM unlocked: tempo tracking resumed");
+				continue;
+			}
+			case Command::NudgeBack:
+				tracker_.nudge(-kNudgeStepBeats);
+				append_note(beat, "nudge: beat phase back one step");
+				continue;
+			case Command::NudgeFwd:
+				tracker_.nudge(kNudgeStepBeats);
+				append_note(beat, "nudge: beat phase forward one step");
+				continue;
+			default:
+				break;
+			}
 			auto evs = scheduler_.command(m.cmd, m.palette_index, beat);
 			append_events(evs);
 		}
@@ -188,6 +246,23 @@ struct Director::Impl {
 		const double bass_fast_min = beat_bass_fast_min_ < 0.0 ? 0.0 : beat_bass_fast_min_;
 		beat_bass_fast_max_ = 0.0;
 		beat_bass_fast_min_ = -1.0;
+
+		// v1.2 Music dock: a queued Drop now / Force breakdown lands here, on the next beat.
+		if (pending_section_ >= 0) {
+			const Section sec = static_cast<Section>(pending_section_);
+			pending_section_ = -1;
+			if (sec != cur_section_) {
+				cur_section_ = sec;
+				section_.force(sec, b);
+				Event e;
+				e.type = Event::Type::SectionChange;
+				e.beat = b;
+				e.section = sec;
+				e.detail = std::string("forced section -> ") + section_name(sec);
+				append_events({e});
+				append_events(scheduler_.on_section_change(sec, b));
+			}
+		}
 
 		const bool silent = silence_smooth_ < kSilenceThreshold;
 		const bool kick = !silent && bass_fast_max > kAbsFloor &&
@@ -212,7 +287,7 @@ struct Director::Impl {
 			}
 		}
 
-		const uint64_t ph = b / static_cast<uint64_t>(phrase_beats_);
+		const uint64_t ph = (b + phrase_offset_) / static_cast<uint64_t>(phrase_beats_);
 		if (!phrase_inited_) {
 			last_phrase_ = ph;
 			phrase_inited_ = true;
@@ -237,7 +312,7 @@ struct Director::Impl {
 		st.rotation_offset = scheduler_.rotation_offset();
 		st.section = cur_section_;
 		st.beat = beat;
-		st.phrase = beat / static_cast<uint64_t>(phrase_beats_);
+		st.phrase = (beat + phrase_offset_) / static_cast<uint64_t>(phrase_beats_);
 		st.live_palette = scheduler_.live_palette();
 		st.prev_palette = scheduler_.prev_palette();
 		st.pfade = scheduler_.pfade();
@@ -258,6 +333,7 @@ struct Director::Impl {
 		st.kick_threshold = kick_thr_;
 		st.kicks = kicks_;
 		st.drop_cycle = scheduler_.drop_cycle_active();
+		st.bpm_locked = tracker_.locked();
 		return st;
 	}
 
@@ -293,6 +369,10 @@ struct Director::Impl {
 	uint64_t last_phrase_ = 0;
 	bool phrase_inited_ = false;
 	Section cur_section_ = Section::Groove;
+	// v1.2 Music dock: phrase re-anchor offset, queued forced section, integrated audio time.
+	uint64_t phrase_offset_ = 0;
+	int pending_section_ = -1;
+	double clock_s_ = 0.0;
 };
 
 Director::Director(const SetFile &s) : impl_(new Impl(s)) {}
@@ -332,6 +412,7 @@ void Director::push_audio(const float *mono, std::size_t frames, uint32_t sample
 	while (pos + kHop <= d.pending_.size()) {
 		const float *base = d.pending_.data() + pos;
 		const AnalysisResult ar = d.analysis_.process(base, kHop);
+		d.clock_s_ += dt; // v1.2: shared time base for tap tempo
 
 		d.silence_smooth_ += (ar.energy.total - d.silence_smooth_) * kSilenceSmooth;
 		const bool silent = d.silence_smooth_ < kSilenceThreshold;

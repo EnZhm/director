@@ -25,6 +25,7 @@ OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 
 extern void palette_lock_filter_load(void);
 extern void palette_director_dock_load(void);
+extern void palette_director_music_dock_load(void);
 extern void pd_clock_api_register(void);
 
 bool obs_module_load(void)
@@ -33,6 +34,7 @@ bool obs_module_load(void)
 
 	palette_lock_filter_load();
 	palette_director_dock_load();
+	palette_director_music_dock_load();
 	pd_clock_api_register();
 
 	return true;
