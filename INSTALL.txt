@@ -1,0 +1,135 @@
+Director 1.0.0 for OBS Studio 32.2.x (Windows x64)
+=================================================
+
+Director is one install of two OBS plugins that drive a Synesthesia VJ feed from
+the DJ mix: Palette Director locks the picture to neon palettes and owns the beat
+clock; Clip Director plays folders of clips and switches Synesthesia scenes on the
+same beat.
+
+Director 1.0.0 = Palette Director 1.2.0 + Clip Director 1.1.0.
+
+
+1. What is in this zip
+----------------------
+  palette-director/   Palette Lock filter, Palette Director dock, Music dock
+  clip-director/      Clip Director source, Clip Director dock, MIDI Director dock
+  INSTALL.txt         this file
+  LICENSE             GPL-2.0
+  SHA256SUMS.txt      checksums of the two plugin folders as shipped
+
+Each component keeps its own INSTALL.txt in its own repository, with the full
+detail for that component.
+
+
+2. Requirements
+---------------
+  - Windows 10 or 11, 64-bit.
+  - OBS Studio 32.2.x (both plugins are built against 32.2.2).
+  - Synesthesia with a Pro licence: the Spout input and OSC scene control both
+    need Pro.
+  - The DJ mix as one OBS audio source (an "Audio Input Capture" is enough).
+  - Optional: a MIDI controller for the MIDI Director dock.
+  - Optional: Python 3 and ffmpeg for tools\cd-ingest.py (clip preparation).
+
+
+3. Install
+----------
+1. Close OBS.
+2. If an older Palette Director or Clip Director is installed, delete
+     C:\ProgramData\obs-studio\plugins\palette-director
+     C:\ProgramData\obs-studio\plugins\clip-director
+3. Unzip director-1.0.0-windows-x64.zip and copy the two folders
+   "palette-director" and "clip-director" into
+     C:\ProgramData\obs-studio\plugins\
+   so that these files exist:
+     C:\ProgramData\obs-studio\plugins\palette-director\bin\64bit\palette-director.dll
+     C:\ProgramData\obs-studio\plugins\palette-director\data\sets\neon-default.json
+     C:\ProgramData\obs-studio\plugins\clip-director\bin\64bit\clip-director.dll
+4. Start OBS. Help > Log Files > View Current Log should show
+     [palette-director] plugin loaded successfully (version 1.2.0)
+     [clip-director] plugin loaded successfully (version 1.1.0)
+   If one of the lines is missing, check the folder layout above.
+
+
+4. First run
+------------
+A minimal working rig, in order:
+
+1. Synesthesia: set up the Spout input (Settings > Syphon/Spout Input) and the OSC
+   ports you will use for scene control, for example 7000 to send and 7001 for the
+   feedback. Leave Synesthesia running.
+2. OBS: add the Spout source that carries Synesthesia into a scene.
+3. Palette Lock: right-click that source > Filters > + > Palette Lock. Put it ABOVE
+   any finishing filters (CRT etc.). Press "Load file..." and open
+     C:\ProgramData\obs-studio\plugins\palette-director\data\sets\neon-default.json
+   the set is copied into your set folder and appears in the Set list.
+4. Palette Director dock: Docks menu > "Palette Director". The top strip shows the
+   filter, a section chip (GROOVE / BREAKDOWN / DROP), the lock state, Coverage and
+   the palette pads; BPM, confidence and the last 64 beats are in the Music dock.
+   Set-up opens the tabs (Set, Palettes, Look, Changes, Director, Log).
+5. Audio: make sure the DJ mix is an OBS audio source (for example an Audio Input
+   Capture named "Mixer"), then pick it in the Music dock > Audio source. Set the
+   Fallback BPM for silent feeds. The BPM, the beat lights and the section should
+   now follow the music.
+6. Clip Director: add a "Clip Director" source, add your clip folders, leave Clock
+   on "Follow Palette Director", and put a Spout Filter on the source with a name
+   (for example CD-Clips). In Synesthesia (Settings > Syphon/Spout Input) pick that
+   sender, then pick it under Media.
+7. Synesthesia scenes over OSC: Clip Director dock > Synesthesia tab. Host
+   127.0.0.1, the ports from step 1, Auto ON, then fill the Groove / Breakdown /
+   Drop scene pools. "Import from Synesthesia" fills the scene names from its OSC
+   output. Scenes launch on the same beat as the clip cut and the drop downbeat.
+8. Optional: Docks menu > "MIDI Director", press Learn, press a control, then move
+   a fader or knob on the controller to map it.
+9. Press Save on the Palette Director dock > Set tab. The set (palettes, look,
+   changes, lock behaviours) is written to
+     Documents\PaletteDirector\sets\
+
+
+5. Where things live
+--------------------
+  C:\ProgramData\obs-studio\plugins\palette-director   the Palette Director plugin
+  C:\ProgramData\obs-studio\plugins\clip-director      the Clip Director plugin
+  Documents\PaletteDirector\sets\                      your sets, one JSON per set
+  the scene collection                                 clip folders, clock, cut rules,
+                                                       Synesthesia pools, MIDI mappings
+
+Sets are also stored inline in each Palette Lock filter, so a scene collection keeps
+working if a set file is missing. To uninstall cleanly, remove both plugin folders;
+your sets in Documents\PaletteDirector\sets\ are kept.
+
+
+6. Troubleshooting
+------------------
+  - No dock in the Docks menu: the plugin did not load. Check the log for the two
+    "plugin loaded successfully" lines and the folder layout in section 3.
+  - Nothing changes with the music: check the Music dock meter. LEVEL well below
+    -30 dBFS means raise Input gain; if it shows CLIP, lower it. If the kick light
+    misses kicks, raise Kick sensitivity.
+  - No BPM at all: no audio source is selected, or it is silent. The Director then
+    runs at the Fallback BPM and nothing changes on its own.
+  - Synesthesia scene control does nothing: OSC needs Synesthesia Pro, and the host
+    and ports must match Synesthesia's Settings > OSC. The link chip in the
+    Synesthesia tab turns green when Synesthesia echoes a launch on the feedback
+    port; amber means messages are going out but nothing is coming back.
+  - Synesthesia does not list the Spout sender: if OBS was force-closed, an old
+    sender name can stay registered. Close OBS normally, or rename the sender.
+  - The clip clock shows "free": no Palette Lock found, or Palette Director is older
+    than 1.1. Check the log for "clock following Palette Director".
+
+
+7. Uninstall
+------------
+Close OBS and delete
+  C:\ProgramData\obs-studio\plugins\palette-director
+  C:\ProgramData\obs-studio\plugins\clip-director
+Your sets in Documents\PaletteDirector\sets\ and the "_cd" folders made by the
+ingest tool can be deleted at any time.
+
+
+8. Licence
+----------
+GPL-2.0. Source and per-component docs:
+  https://github.com/EnZhm/director
+  https://github.com/EnZhm/palette-director
+  https://github.com/EnZhm/clip-director
