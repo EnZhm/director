@@ -61,7 +61,6 @@ void apply_settings_defaults(Settings &s);
 struct SourceConfig {
 	std::string clock; // "" auto, "\x01free", or "source|filter"
 	int sync_offset_ms = 0;
-	double fallback_bpm = 128.0;
 
 	std::string midi_out_device;
 	midi::MsgSpec next = midi::next_msg_default();
@@ -69,7 +68,6 @@ struct SourceConfig {
 
 	bool trigger_breakdown = true;
 	bool trigger_drop = true;
-	bool trigger_groove_phrase = false;
 	int cooldown_beats = 16;
 	double lead_ms = 0.0; // Scene lead, 0..500
 };

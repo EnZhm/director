@@ -163,7 +163,7 @@ void read_clock(SdSource *c, double seconds, cd::ClockSample &out)
 	director_clock k = {};
 	const bool ok = director_clock_read(&k);
 	if (ok) {
-		c->bpm = k.bpm > 1.0 ? k.bpm : c->cfg.fallback_bpm;
+		c->bpm = k.bpm > 1.0 ? k.bpm : 128.0;
 		c->beats = k.beats_now + c->cfg.sync_offset_ms / 1000.0 * c->bpm / 60.0;
 		c->section = (cd::Section)std::clamp(k.section, 0, 2);
 	}
@@ -253,7 +253,6 @@ void sd_defaults(obs_data_t *s)
 	 * Director unconditionally now. */
 	obs_data_set_default_string(s, "clock_source", "");
 	obs_data_set_default_int(s, "sync_offset_ms", 0);
-	obs_data_set_default_double(s, "fallback_bpm", 128.0);
 
 	obs_data_set_default_string(s, "midi_out_device", "");
 	obs_data_set_default_string(s, "next_type", "note");
@@ -265,7 +264,6 @@ void sd_defaults(obs_data_t *s)
 
 	obs_data_set_default_bool(s, "trigger_breakdown", true);
 	obs_data_set_default_bool(s, "trigger_drop", true);
-	obs_data_set_default_bool(s, "trigger_groove_phrase", false);
 	obs_data_set_default_int(s, "cooldown_beats", 16);
 	obs_data_set_default_double(s, "syn_lead_ms", 0.0);
 }
@@ -291,7 +289,6 @@ void apply(SdSource *c, obs_data_t *settings)
 	cd::SwitchConfig sc;
 	sc.trigger_breakdown = n.trigger_breakdown;
 	sc.trigger_drop = n.trigger_drop;
-	sc.trigger_groove_phrase = n.trigger_groove_phrase;
 	sc.cooldown_beats = n.cooldown_beats;
 	sc.lead_ms = n.lead_ms;
 	c->sched->set_config(sc);
@@ -382,7 +379,6 @@ obs_properties_t *sd_properties(void *)
 	/* clock_source is no longer shown (Scene Director always follows Music Director); the key
 	 * stays in the saved settings, it is just not read or deleted. */
 	obs_properties_add_int_slider(ck, "sync_offset_ms", obs_module_text("SyncOffset"), -200, 200, 1);
-	obs_properties_add_float(ck, "fallback_bpm", obs_module_text("FallbackBpm"), 60.0, 200.0, 0.5);
 	obs_properties_add_group(pr, "g_clock", obs_module_text("Group.Clock"), OBS_GROUP_NORMAL, ck);
 
 	obs_properties_t *mi = obs_properties_create();
@@ -403,7 +399,6 @@ obs_properties_t *sd_properties(void *)
 	obs_properties_t *tr = obs_properties_create();
 	obs_properties_add_bool(tr, "trigger_breakdown", obs_module_text("Trigger.Breakdown"));
 	obs_properties_add_bool(tr, "trigger_drop", obs_module_text("Trigger.Drop"));
-	obs_properties_add_bool(tr, "trigger_groove_phrase", obs_module_text("Trigger.GroovePhrase"));
 	obs_properties_add_int(tr, "cooldown_beats", obs_module_text("Cooldown"), 0, 256, 1);
 	obs_properties_add_int_slider(tr, "syn_lead_ms", obs_module_text("SceneLead"), 0, 500, 10);
 	obs_properties_add_group(pr, "g_triggers", obs_module_text("Group.Triggers"), OBS_GROUP_NORMAL, tr);
@@ -486,7 +481,6 @@ bool status(obs_source_t *src, Status &o)
 	const cd::SwitchConfig &sc = c->sched->config();
 	o.trigger_breakdown = sc.trigger_breakdown;
 	o.trigger_drop = sc.trigger_drop;
-	o.trigger_groove_phrase = sc.trigger_groove_phrase;
 	o.cooldown_beats = sc.cooldown_beats;
 	o.lead_ms = sc.lead_ms;
 	o.last_switch_beat = c->sched->last_switch_beat();
@@ -518,12 +512,11 @@ void set_messages(obs_source_t *src, const cd::midi::MsgSpec &next, const cd::mi
 	});
 }
 
-void set_triggers(obs_source_t *src, bool breakdown, bool drop, bool groove_phrase, int cooldown_beats, double lead_ms)
+void set_triggers(obs_source_t *src, bool breakdown, bool drop, int cooldown_beats, double lead_ms)
 {
 	write_settings(src, [&](obs_data_t *s) {
 		obs_data_set_bool(s, "trigger_breakdown", breakdown);
 		obs_data_set_bool(s, "trigger_drop", drop);
-		obs_data_set_bool(s, "trigger_groove_phrase", groove_phrase);
 		obs_data_set_int(s, "cooldown_beats", std::clamp(cooldown_beats, 0, 4096));
 		obs_data_set_double(s, "syn_lead_ms", std::clamp(lead_ms, 0.0, 500.0));
 	});

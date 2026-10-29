@@ -84,7 +84,7 @@ Music Director never writes Palette Lock settings. No Palette Lock and no key me
 ## 6. Scene Director (Synesthesia MIDI out, follower)
 
 - Only `scene_director_source` is registered (the `clip_director_source` alias is removed), and the no-op `video_render` is kept.
-- Scene Director sends Synesthesia playlist Next/Prev over MIDI out (`common/midi`). It keeps the MIDI out device, the Next/Prev notes and channel, the `scene_director_next/prev` hotkeys, the triggers (breakdown, drop, groove phrase), cooldown and lead. The MIDI Director dock moves to Music Director.
+- Scene Director sends Synesthesia playlist Next/Prev over MIDI out (`common/midi`). It keeps the MIDI out device, the Next/Prev notes and channel, the `scene_director_next/prev` hotkeys, the triggers (breakdown, drop), cooldown and lead. The MIDI Director dock moves to Music Director.
 - The clock comes from `director_clock_read()` through `director_follow::Follower`; the `clock_source` key is kept and hidden.
 - With several SD sources, one section edge sends exactly ONE Next, through a process-wide guard keyed by `section_seq`.
 - Breakdown and drop Nexts go out on `section_beat` (minus the configured lead), the same beat as the palette change and the clip cut.

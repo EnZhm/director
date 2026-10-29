@@ -13,13 +13,6 @@ const char *sec_name(Section s)
 	return s == Section::Breakdown ? "breakdown" : (s == Section::Drop ? "drop" : "groove");
 }
 
-// First phrase downbeat at or after `beat`.
-double next_phrase_after(double beat, int phrase_beats)
-{
-	const double pb = static_cast<double>(std::max(1, phrase_beats));
-	return std::ceil(beat / pb - 1e-9) * pb;
-}
-
 } // namespace
 
 const char *SwitchEvent::reason_name() const
@@ -29,8 +22,6 @@ const char *SwitchEvent::reason_name() const
 		return "breakdown start";
 	case Reason::Drop:
 		return "drop downbeat";
-	case Reason::GroovePhrase:
-		return "groove phrase";
 	case Reason::ManualNext:
 		return "manual next";
 	case Reason::ManualPrev:
@@ -178,16 +169,6 @@ std::vector<SwitchEvent> SwitchScheduler::tick(const ClockSample &clk)
 		else if (section_ == Section::Drop && cfg_.trigger_drop)
 			schedule(SwitchEvent::Reason::Drop, static_cast<double>(sb), bpm, "drop downbeat", true, seq,
 				 sb, forced);
-		else if (section_ == Section::Groove && cfg_.trigger_groove_phrase)
-			schedule(SwitchEvent::Reason::GroovePhrase, next_phrase_after(b, clk.phrase_beats), bpm,
-				 "groove phrase", false, 0, 0, false);
-	} else if (section_ == Section::Groove && cfg_.trigger_groove_phrase) {
-		bool planned = false;
-		for (const Pending &p : pending_)
-			planned |= p.reason == SwitchEvent::Reason::GroovePhrase;
-		if (!planned)
-			schedule(SwitchEvent::Reason::GroovePhrase, next_phrase_after(b, clk.phrase_beats), bpm,
-				 "groove phrase", false, 0, 0, false);
 	}
 
 	/* fire the events that are due */
@@ -196,10 +177,6 @@ std::vector<SwitchEvent> SwitchScheduler::tick(const ClockSample &clk)
 			const Pending p = pending_[i];
 			pending_.erase(pending_.begin() + static_cast<long>(i));
 			out.push_back(emit_event(p));
-			if (p.reason == SwitchEvent::Reason::GroovePhrase && section_ == Section::Groove &&
-			    cfg_.trigger_groove_phrase)
-				schedule(SwitchEvent::Reason::GroovePhrase, p.at_beat + std::max(1, clk.phrase_beats),
-					 bpm, "groove phrase", false, 0, 0, false);
 		} else {
 			++i;
 		}

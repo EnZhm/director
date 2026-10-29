@@ -108,10 +108,8 @@ public:
 		grid->addWidget(head_, 0, 0, 1, 3);
 		on_breakdown_ = new QCheckBox(obs_module_text("Trigger.Breakdown"));
 		on_drop_ = new QCheckBox(obs_module_text("Trigger.Drop"));
-		on_groove_ = new QCheckBox(obs_module_text("Trigger.GroovePhrase"));
 		grid->addWidget(on_breakdown_, 1, 0, 1, 3);
 		grid->addWidget(on_drop_, 2, 0, 1, 3);
-		grid->addWidget(on_groove_, 3, 0, 1, 3);
 		grid->addWidget(new QLabel(obs_module_text("Cooldown")), 4, 0);
 		cooldown_ = new QSpinBox();
 		cooldown_->setRange(0, 256);
@@ -164,7 +162,6 @@ public:
 			[this] { with_source([](obs_source_t *s) { sdapi::manual_prev(s); }); });
 		connect(on_breakdown_, &QCheckBox::toggled, this, [this](bool) { push_triggers(); });
 		connect(on_drop_, &QCheckBox::toggled, this, [this](bool) { push_triggers(); });
-		connect(on_groove_, &QCheckBox::toggled, this, [this](bool) { push_triggers(); });
 		connect(cooldown_, &QSpinBox::editingFinished, this, [this] { push_triggers(); });
 		connect(lead_, &QSlider::valueChanged, this,
 			[this](int v) { lead_label_->setText(QString("%1 ms").arg(v)); });
@@ -304,10 +301,9 @@ private:
 	{
 		const bool bd = on_breakdown_->isChecked();
 		const bool dr = on_drop_->isChecked();
-		const bool gr = on_groove_->isChecked();
 		const int cooldown = cooldown_->value();
 		const double lead = (double)lead_->value();
-		with_source([&](obs_source_t *s) { sdapi::set_triggers(s, bd, dr, gr, cooldown, lead); });
+		with_source([&](obs_source_t *s) { sdapi::set_triggers(s, bd, dr, cooldown, lead); });
 	}
 
 	void push_messages()
@@ -341,7 +337,7 @@ private:
 
 		if (st.clock_following) {
 			clock_->setText(QString("MD %1 BPM").arg(st.bpm, 0, 'f', 1));
-			clock_->setToolTip(obs_module_text("Clock.Pd"));
+			clock_->setToolTip(obs_module_text("Clock.Md"));
 		} else {
 			clock_->setText(obs_module_text("Clock.Waiting"));
 			clock_->setToolTip(obs_module_text("Clock.Waiting"));
@@ -377,7 +373,6 @@ private:
 
 		set_check(on_breakdown_, st.trigger_breakdown);
 		set_check(on_drop_, st.trigger_drop);
-		set_check(on_groove_, st.trigger_groove_phrase);
 		set_spin(cooldown_, std::clamp(st.cooldown_beats, 0, 256));
 		if (lead_->value() != (int)std::lround(st.lead_ms)) {
 			lead_->blockSignals(true);
@@ -458,7 +453,7 @@ private:
 	QComboBox *sources_, *devices_, *next_type_, *prev_type_;
 	QLabel *clock_, *section_, *chip_, *head_, *log_head_, *footer_, *lead_label_;
 	QPushButton *rescan_, *next_btn_, *prev_btn_;
-	QCheckBox *on_breakdown_, *on_drop_, *on_groove_;
+	QCheckBox *on_breakdown_, *on_drop_;
 	QSpinBox *cooldown_, *next_channel_, *next_number_, *prev_channel_, *prev_number_;
 	QSlider *lead_;
 	QPlainTextEdit *log_;

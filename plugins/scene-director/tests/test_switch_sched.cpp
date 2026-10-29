@@ -35,17 +35,6 @@ ClockSample edge(double beat, Section section, int64_t seq, int64_t section_beat
 	return c;
 }
 
-std::vector<SwitchEvent> run(SwitchScheduler &s, double from, double to, double step, Section section,
-			     double bpm = 128.0)
-{
-	std::vector<SwitchEvent> out;
-	for (double b = from; b <= to + 1e-9; b += step) {
-		for (const SwitchEvent &e : s.tick(at(b, section, bpm)))
-			out.push_back(e);
-	}
-	return out;
-}
-
 } // namespace
 
 TEST_CASE("the first clock sample only anchors the scheduler")
@@ -127,31 +116,6 @@ TEST_CASE("drop trigger off: nothing is sent")
 	SwitchScheduler s(cfg);
 	s.tick(at(60.0, Section::Groove));
 	CHECK(s.tick(edge(64.0, Section::Drop, 1, 64)).empty());
-}
-
-TEST_CASE("groove phrases are off by default and fire on phrase downbeats when on")
-{
-	SwitchConfig off;
-	SwitchScheduler s0(off);
-	s0.tick(at(0.0, Section::Groove));
-	CHECK(run(s0, 1.0, 64.0, 1.0, Section::Groove).empty());
-
-	SwitchConfig on;
-	on.trigger_groove_phrase = true;
-	SwitchScheduler s(on);
-	s.tick(at(0.0, Section::Groove));
-	const std::vector<SwitchEvent> ev = run(s, 1.0, 64.0, 1.0, Section::Groove);
-	std::vector<double> beats;
-	for (const auto &e : ev) {
-		CHECK(e.reason == SwitchEvent::Reason::GroovePhrase);
-		CHECK(!e.section_edge);
-		beats.push_back(e.at_beat);
-	}
-	REQUIRE(beats.size() == 4); /* 16, 32, 48, 64 */
-	CHECK(beats[0] == doctest::Approx(16.0));
-	CHECK(beats[1] == doctest::Approx(32.0));
-	CHECK(beats[2] == doctest::Approx(48.0));
-	CHECK(beats[3] == doctest::Approx(64.0));
 }
 
 TEST_CASE("cooldown suppresses an automatic switch too close to the previous one")

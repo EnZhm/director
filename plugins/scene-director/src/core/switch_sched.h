@@ -6,7 +6,6 @@
 //   - BREAKDOWN starts: Next on the section's landing beat (clk.section_beat), the same beat the
 //     palette change and the clip cut land on
 //   - DROP downbeat:    Next on the section's landing beat (clk.section_beat)
-//   - during GROOVE:    optionally Next on every phrase downbeat
 // A section change is acted on exactly once: when clk.section_seq differs from the sequence the
 // scheduler last handled (never on a clk.section comparison, which repeats every poll).
 //
@@ -27,13 +26,12 @@ namespace cd {
 struct SwitchConfig {
 	bool trigger_breakdown = true;
 	bool trigger_drop = true;
-	bool trigger_groove_phrase = false;
 	int cooldown_beats = 16; // an automatic switch this close to the last one is suppressed
 	double lead_ms = 0.0;    // 0..500: send the message this early
 };
 
 struct SwitchEvent {
-	enum class Reason { Breakdown, Drop, GroovePhrase, ManualNext, ManualPrev };
+	enum class Reason { Breakdown, Drop, ManualNext, ManualPrev };
 
 	Reason reason = Reason::Breakdown;
 	double at_beat = 0.0;      // the beat the switch is aimed at

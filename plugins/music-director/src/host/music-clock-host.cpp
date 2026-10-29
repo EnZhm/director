@@ -268,7 +268,7 @@ void detach_audio(Host *h)
 	obs_source_t *src = obs_weak_source_get_source(h->audio_weak);
 	if (src) {
 		obs_source_remove_audio_capture_callback(src, on_audio, h);
-		obs_log(LOG_INFO, "[music-director] audio capture detached from '%s'", obs_source_get_name(src));
+		obs_log(LOG_INFO, "audio capture detached from '%s'", obs_source_get_name(src));
 		obs_source_release(src);
 	}
 	obs_weak_source_release(h->audio_weak);
@@ -307,8 +307,8 @@ void maintain_audio(Host *h, double now)
 	if (h->clock)
 		h->clock->reset_audio_reference();
 	obs_source_add_audio_capture_callback(src, on_audio, h);
-	obs_log(LOG_INFO, "[music-director] audio capture attached to '%s' (%u Hz, %u ch)",
-		h->settings.audio_source.c_str(), audio_output_get_sample_rate(obs_get_audio()), h->channels.load());
+	obs_log(LOG_INFO, "audio capture attached to '%s' (%u Hz, %u ch)", h->settings.audio_source.c_str(),
+		audio_output_get_sample_rate(obs_get_audio()), h->channels.load());
 	obs_source_release(src);
 }
 
@@ -479,7 +479,7 @@ void worker_main(Host *h)
 			lines.push_back(line);
 			if (log_tokens > 0) {
 				log_tokens--;
-				obs_log(LOG_INFO, "[music-director] %s", line);
+				obs_log(LOG_INFO, "%s", line);
 			}
 		}
 
@@ -515,7 +515,7 @@ void worker_main(Host *h)
 		if (now - last_status >= 4.0) {
 			last_status = now;
 			obs_log(LOG_INFO,
-				"[music-director] status bpm %.1f conf %.2f %s beat %llu phrase %llu epoch %llu "
+				"status bpm %.1f conf %.2f %s beat %llu phrase %llu epoch %llu "
 				"level %.1f dBFS kicks %u gain %+.1f dB sens %d%%%s%s",
 				st.bpm, st.confidence, section_name(st.section), (unsigned long long)st.beat,
 				(unsigned long long)st.phrase, (unsigned long long)st.epoch, st.input_db, st.kicks,
@@ -572,7 +572,7 @@ void register_clock_proc()
 {
 	proc_handler_t *ph = obs_get_proc_handler();
 	if (!ph) {
-		obs_log(LOG_ERROR, "[music-director] no global proc handler; the clock was not registered");
+		obs_log(LOG_ERROR, "no global proc handler; the clock was not registered");
 		return;
 	}
 	/* Singleton: if the proc already answers, another Music Director is loaded. */
@@ -582,7 +582,7 @@ void register_clock_proc()
 	const bool answered = taken && calldata_bool(&cd, "ok");
 	calldata_free(&cd);
 	if (answered) {
-		obs_log(LOG_ERROR, "[music-director] director_clock is already registered (another Music Director?); "
+		obs_log(LOG_ERROR, "director_clock is already registered (another Music Director?); "
 				   "this copy registers nothing");
 		return;
 	}
@@ -595,7 +595,7 @@ void register_clock_proc()
 		"out float bass, out bool silent, out bool paused, out bool enabled, out int sample_ts_ns, "
 		"out int ts_source, out int now_ns)",
 		proc_clock, nullptr);
-	obs_log(LOG_INFO, "[music-director] clock proc registered (director_clock v%d)", DIRECTOR_CLOCK_API_VERSION);
+	obs_log(LOG_INFO, "clock proc registered (director_clock v%d)", DIRECTOR_CLOCK_API_VERSION);
 }
 
 #if defined(ENABLE_FRONTEND_API)
@@ -754,7 +754,7 @@ void migrate_if_needed(obs_data_t *collection)
 	const md::Migration m = md::pick_migration(ctx.records);
 
 	if (!m.found) {
-		obs_log(LOG_INFO, "[music-director] no Palette Lock filter; using Music Director's own defaults");
+		obs_log(LOG_INFO, "no Palette Lock filter; using Music Director's own defaults");
 		g_migration_note.clear();
 		push_settings(mdhost::Settings{});
 		write_settings(collection); // mark the collection as migrated so this runs once
@@ -769,7 +769,7 @@ void migrate_if_needed(obs_data_t *collection)
 			g_host->view.settings.migrated_from = g_migration_note;
 		}
 		obs_log(LOG_INFO,
-			"[music-director] migrated audio settings from '%s' on '%s': audio '%s', gain %+.1f dB, "
+			"migrated audio settings from '%s' on '%s': audio '%s', gain %+.1f dB, "
 			"sens %d%%, fallback %.0f BPM, phrase %d",
 			m.filter.c_str(), m.source.c_str(), m.values.audio_source.c_str(), m.values.input_gain_db,
 			(int)lroundf(m.values.kick_sensitivity * 100.0f), m.values.fallback_bpm, m.values.phrase_beats);
@@ -781,7 +781,7 @@ void migrate_if_needed(obs_data_t *collection)
 				names += "'" + ctx.records[idx].filter + "' on '" + ctx.records[idx].source + "'";
 			}
 			obs_log(LOG_WARNING,
-				"[music-director] other Palette Lock filters hold different audio settings (not "
+				"other Palette Lock filters hold different audio settings (not "
 				"migrated): %s",
 				names.c_str());
 		}
@@ -842,7 +842,7 @@ void load()
 	obs_frontend_add_save_callback(frontend_save, nullptr);
 	obs_frontend_add_event_callback(frontend_event, nullptr);
 #endif
-	obs_log(LOG_INFO, "[music-director] clock loaded (the suite's one music clock)");
+	obs_log(LOG_INFO, "clock loaded (the suite's one music clock)");
 }
 
 void unload()
@@ -862,7 +862,7 @@ void unload()
 		delete g_host;
 		g_host = nullptr;
 	}
-	obs_log(LOG_INFO, "[music-director] clock unloaded");
+	obs_log(LOG_INFO, "clock unloaded");
 }
 
 void command(Cmd c)
@@ -878,7 +878,7 @@ void set_settings(const Settings &s, const char *why)
 {
 	push_settings(s);
 	obs_log(LOG_INFO,
-		"[music-director] settings: audio '%s', gain %+.1f dB, sens %d%%, fallback %.0f BPM, "
+		"settings: audio '%s', gain %+.1f dB, sens %d%%, fallback %.0f BPM, "
 		"phrase %d (%s)",
 		s.audio_source.c_str(), s.input_gain_db, (int)lroundf(s.kick_sensitivity * 100.0f), s.fallback_bpm,
 		s.phrase_beats, why ? why : "");

@@ -119,7 +119,7 @@ protected:
 	void showEvent(QShowEvent *e) override
 	{
 		QWidget::showEvent(e);
-		obs_log(LOG_INFO, "[music-director] music dock shown: 30 Hz poll started");
+		obs_log(LOG_INFO, "music dock shown: 30 Hz poll started");
 		timer->start();
 		poll();
 	}
@@ -128,7 +128,7 @@ protected:
 	{
 		QWidget::hideEvent(e);
 		timer->stop();
-		obs_log(LOG_INFO, "[music-director] music dock hidden: poll stopped (the clock keeps running)");
+		obs_log(LOG_INFO, "music dock hidden: poll stopped (the clock keeps running)");
 	}
 
 	/* ---------------------------------------------------------------- UI */
@@ -514,11 +514,11 @@ void music_director_music_dock_load(void)
 #if defined(ENABLE_FRONTEND_API) && defined(ENABLE_QT)
 	auto *dock = new MusicDock();
 	if (!obs_frontend_add_dock_by_id("music-director-dock", obs_module_text("MusicDock.Title"), dock)) {
-		obs_log(LOG_ERROR, "[music-director] music dock id already in use; dock not added");
+		obs_log(LOG_ERROR, "music dock id already in use; dock not added");
 		delete dock;
 		return;
 	}
 	g_music_dock = dock;
-	obs_log(LOG_INFO, "[music-director] music dock registered (music-director-dock)");
+	obs_log(LOG_INFO, "music dock registered (music-director-dock)");
 #endif
 }

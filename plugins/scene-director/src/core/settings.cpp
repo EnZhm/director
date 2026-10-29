@@ -362,7 +362,6 @@ void apply_settings_defaults(Settings &s)
 {
 	s.set_default_string("clock_source", "");
 	s.set_default_int("sync_offset_ms", 0);
-	s.set_default_double("fallback_bpm", 128.0);
 
 	s.set_default_string("midi_out_device", "");
 	s.set_default_string("next_type", "note");
@@ -374,7 +373,6 @@ void apply_settings_defaults(Settings &s)
 
 	s.set_default_bool("trigger_breakdown", true);
 	s.set_default_bool("trigger_drop", true);
-	s.set_default_bool("trigger_groove_phrase", false);
 	s.set_default_int("cooldown_beats", 16);
 	/* Scene lead keeps the key name Clip Director 1.1.0 used; lead_ms is read as a fallback */
 	s.set_default_double("syn_lead_ms", 0.0);
@@ -399,7 +397,6 @@ SourceConfig read_config(const Settings &s)
 	SourceConfig c;
 	c.clock = s.get_string("clock_source");
 	c.sync_offset_ms = (int)std::clamp((long long)s.get_int("sync_offset_ms"), -200ll, 200ll);
-	c.fallback_bpm = std::clamp(s.get_double("fallback_bpm"), 60.0, 200.0);
 
 	c.midi_out_device = s.get_string("midi_out_device");
 
@@ -412,7 +409,6 @@ SourceConfig read_config(const Settings &s)
 
 	c.trigger_breakdown = s.get_bool("trigger_breakdown");
 	c.trigger_drop = s.get_bool("trigger_drop");
-	c.trigger_groove_phrase = s.get_bool("trigger_groove_phrase");
 	c.cooldown_beats = (int)std::clamp((long long)s.get_int("cooldown_beats"), 0ll, 4096ll);
 
 	const double lead = s.has("syn_lead_ms") ? s.get_double("syn_lead_ms") : s.get_double("lead_ms");

@@ -28,7 +28,7 @@ struct Status {
 	uint64_t midi_sent = 0;
 
 	// scheduler
-	bool trigger_breakdown = true, trigger_drop = true, trigger_groove_phrase = false;
+	bool trigger_breakdown = true, trigger_drop = true;
 	int cooldown_beats = 16;
 	double lead_ms = 0.0;
 	double last_switch_beat = 0.0;
@@ -49,7 +49,7 @@ bool status(obs_source_t *src, Status &out);
 /* settings (saved with the scene collection) */
 void set_midi_out(obs_source_t *src, const std::string &device);
 void set_messages(obs_source_t *src, const cd::midi::MsgSpec &next, const cd::midi::MsgSpec &prev);
-void set_triggers(obs_source_t *src, bool breakdown, bool drop, bool groove_phrase, int cooldown_beats, double lead_ms);
+void set_triggers(obs_source_t *src, bool breakdown, bool drop, int cooldown_beats, double lead_ms);
 
 /* manual switches: always fire, and restart the cooldown */
 void manual_next(obs_source_t *src);

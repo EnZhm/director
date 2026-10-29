@@ -26,9 +26,11 @@ Director's.
 - **New: beat-synced MIDI Next / Previous output.** Scene Director follows **Music Director's**
   beat clock and sends the message when a **breakdown** starts and on the **drop downbeat** -
   landing on the same beat as the palette change and the clip cut (Music Director's
-  `section_beat`) - and optionally on every phrase downbeat during a groove; the dock's
-  **Next** / **Prev** buttons and the hotkeys `scene_director_next` / `scene_director_prev`
-  send it by hand. The target, the triggers, the cooldown and Scene lead are configurable.
+  `section_beat`); the dock's **Next** / **Prev** buttons and the hotkeys
+  `scene_director_next` / `scene_director_prev` send it by hand. The target, the triggers,
+  the cooldown and Scene lead are configurable.
+- **Removed: Fallback BPM and the groove-phrase trigger**; Scene Director sends Next on
+  breakdowns, drops and manual Next/Prev only.
 - **Requires Music Director** for the clock. Without it Scene Director idles: no automatic
   switches, one log line, and the dock reads "Waiting for Music Director". Manual Next / Prev
   still work.

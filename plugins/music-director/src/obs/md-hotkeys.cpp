@@ -188,7 +188,7 @@ bool load_pd_binding(const char *pd_name, obs_data_array_t *arr)
 		if (g_ids[i] == OBS_INVALID_HOTKEY_ID)
 			return false;
 		obs_hotkey_load(g_ids[i], arr);
-		obs_log(LOG_INFO, "[music-director] migrated hotkey binding %s -> %s", kPdNames[i], kHotkeys[i].name);
+		obs_log(LOG_INFO, "migrated hotkey binding %s -> %s", kPdNames[i], kHotkeys[i].name);
 		return true;
 	}
 #else
@@ -254,10 +254,10 @@ extern "C" void music_director_hotkey_load(void)
 		g_ids[i] = obs_hotkey_register_frontend(kHotkeys[i].name, obs_module_text(kHotkeys[i].text_key),
 							on_hotkey, const_cast<MdHotkey *>(&kHotkeys[i]));
 		if (g_ids[i] == OBS_INVALID_HOTKEY_ID)
-			obs_log(LOG_ERROR, "[music-director] hotkey '%s' could not be registered", kHotkeys[i].name);
+			obs_log(LOG_ERROR, "hotkey '%s' could not be registered", kHotkeys[i].name);
 	}
 	g_registered = true;
-	obs_log(LOG_INFO, "[music-director] %d clock hotkeys registered (md_*)", kN);
+	obs_log(LOG_INFO, "%d clock hotkeys registered (md_*)", kN);
 #endif
 }
 

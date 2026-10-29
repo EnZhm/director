@@ -17,7 +17,6 @@ const char *kOldStyle = R"({
   "clip_overrides": [{"path": "/media/clips/groove/a.mp4", "ban": true, "polarity": 1}],
   "clock_source": "",
   "sync_offset_ms": 0,
-  "fallback_bpm": 128.0,
   "seed": 7,
   "speed_min_pct": 100,
   "normalize": true,
@@ -55,7 +54,6 @@ TEST_CASE("an empty settings object falls back to the defaults")
 	CHECK(c.midi_out_device.empty());
 	CHECK(c.trigger_breakdown);
 	CHECK(c.trigger_drop);
-	CHECK(!c.trigger_groove_phrase);
 	CHECK(c.cooldown_beats == 16);
 	CHECK(c.lead_ms == doctest::Approx(0.0));
 	CHECK(c.next.type == midi::Type::Note);
@@ -83,7 +81,6 @@ TEST_CASE("a Clip Director 1.1.0 settings object loads with the new defaults")
 	/* the new keys are not in the old object: the defaults hold */
 	CHECK(c.trigger_breakdown);
 	CHECK(c.trigger_drop);
-	CHECK(!c.trigger_groove_phrase);
 	CHECK(c.cooldown_beats == 16);
 	CHECK(c.next.number == 60);
 	CHECK(c.prev.number == 59);
@@ -92,7 +89,6 @@ TEST_CASE("a Clip Director 1.1.0 settings object loads with the new defaults")
 	CHECK(c.midi_out_device == "Port A");
 	CHECK(c.lead_ms == doctest::Approx(250.0)); /* syn_lead_ms, the key Clip Director used */
 	CHECK(c.clock.empty());
-	CHECK(c.fallback_bpm == doctest::Approx(128.0));
 }
 
 TEST_CASE("the removed clip and OSC keys are kept, not dropped")
@@ -145,7 +141,6 @@ TEST_CASE("explicitly set values win over the defaults and are clamped on read")
 	s.set_string("next_type", "cc");
 	s.set_int("prev_channel", 99); /* clamps to 16 */
 	s.set_int("prev_number", -4);  /* clamps to 0 */
-	s.set_bool("trigger_groove_phrase", true);
 	s.set_int("cooldown_beats", 4);
 	s.set_double("syn_lead_ms", 999.0); /* clamps to 500 */
 	s.set_string("midi_out_device", "loopback 1");
@@ -156,7 +151,6 @@ TEST_CASE("explicitly set values win over the defaults and are clamped on read")
 	CHECK(c.next.type == midi::Type::Control);
 	CHECK(c.prev.channel == 16);
 	CHECK(c.prev.number == 0);
-	CHECK(c.trigger_groove_phrase);
 	CHECK(c.cooldown_beats == 4);
 	CHECK(c.lead_ms == doctest::Approx(500.0));
 	CHECK(c.midi_out_device == "loopback 1");

@@ -81,7 +81,7 @@ DJ mixer -> OBS audio -> Music Director clock -> Scene Director -> MIDI
 2. **Scene Director sends Next / Prev.** By itself it sends **Next** when Music Director
    reports a **breakdown** and on the **drop downbeat**, both landing on the section's
    `section_beat` - the same beat the palette change and the clip cut land on; nothing is sent
-   during a groove unless you turn the groove-phrase trigger on. By hand it sends **Next** or
+   during a groove. By hand it sends **Next** or
    **Prev** from the dock's buttons, or from the hotkeys `scene_director_next` /
    `scene_director_prev` (Music Director's MIDI Director dock can drive those like any other
    hotkey).
@@ -110,7 +110,7 @@ Open it from Docks > "Scene Director".
 | Top | The Scene Director source, the clock (`MD ... BPM` while following Music Director, else "Waiting for Music Director") and the section chip (GROOVE / BREAKDOWN / DROP) |
 | Link | The link chip and the MIDI out device, with a Rescan button. The chip reads `Port open` (green), `Port not found` (red: the device is not connected right now - it is retried quietly) or `No port selected` (grey) |
 | Next / Prev | Send the message now. A manual switch always fires and bypasses the cooldown |
-| Automatic switches | Breakdown start and drop downbeat (both on the section's landing beat), and optionally every phrase downbeat during a groove |
+| Automatic switches | Breakdown start and drop downbeat, both on the section's landing beat |
 | Cooldown (beats) | After a switch, an automatic section switch this close to it is held back (default 16). Forced sections (Force breakdown / Drop now) and manual switches bypass it |
 | Scene lead (ms) | Send the automatic message this much early, to cover Synesthesia's own scene-load time (default 0). It applies to the automatic switches only; the target beat does not move |
 | Messages | The Next and Previous messages: type (Note or Control change), channel 1-16, number 0-127. A Note is sent at velocity 127 with its note off 50 ms later; a Control change is sent with value 127 |
@@ -126,7 +126,6 @@ Example log:
 ```
   128.00  -> NEXT Note ch16 #60  msg 0x7F3C9F  at beat 128.00  [breakdown start]
   160.00  -> NEXT Note ch16 #60  msg 0x7F3C9F  at beat 160.00  [drop downbeat]
-  192.00  -> NEXT Note ch16 #60  msg 0x7F3C9F  at beat 192.00  [groove phrase] (early)
   200.50  -> PREV Note ch16 #59  msg 0x7F3B9F  at beat 200.50  [manual prev]
 ```
 
@@ -138,13 +137,11 @@ edited in the dock or in the source's properties (right-click the source > Prope
 | Property | Key | Default |
 |---|---|---|
 | Sync offset (ms) | `sync_offset_ms` | 0 |
-| Fallback BPM | `fallback_bpm` | 128 |
 | MIDI out device | `midi_out_device` | none |
 | Next message | `next_type`, `next_channel`, `next_number` | Note, channel 16, number 60 |
 | Previous message | `prev_type`, `prev_channel`, `prev_number` | Note, channel 16, number 59 |
 | Send Next on a breakdown start | `trigger_breakdown` | on |
 | Send Next on the drop downbeat | `trigger_drop` | on |
-| Send Next every phrase during a groove | `trigger_groove_phrase` | off |
 | Cooldown (beats) | `cooldown_beats` | 16 |
 | Scene lead (ms) | `syn_lead_ms` | 0 |
 
