@@ -1,0 +1,228 @@
+Scene Director 2.0.0 for OBS Studio 32.2.x (Windows x64)
+========================================================
+
+Scene Director follows Palette Director's beat clock and sends MIDI Next / Previous to a
+virtual MIDI port, so a Synesthesia playlist switches on the beat: on breakdowns and drops
+by itself, and from a dock button or an OBS hotkey by hand. It is part of Director 1.1.0
+and ships as Windows x64 only.
+
+Scene Director 2.0.0 was called Clip Director up to 1.1.0. The plugin no longer plays
+clips: the clip pipeline and the Synesthesia OSC control were removed and the plugin was
+renamed. There is no clip playback, no OSC, no Skip / Hold / Ban, and no ingest tool.
+
+It adds:
+  - a source "Scene Director"
+      It renders nothing (0 x 0, no video output). It holds the set's settings and drives
+      the MIDI, so it must be added to a scene.
+  - a dock "Scene Director"
+      The clock and section, the MIDI out link, Next / Prev, the automatic switches, the
+      cooldown, Scene lead, the message editors and the log.
+  - a dock "MIDI Director"
+      Map MIDI notes and CCs to OBS hotkeys across the suite.
+  - the hotkeys "Scene Director: Next scene" and "Scene Director: Previous scene"
+      OBS Settings > Hotkeys.
+
+Needs Palette Director 1.1 or later for the beat clock. With an older Palette Director (or
+none) Scene Director free-runs at a fixed BPM, so the dock buttons and the hotkeys still
+work; the automatic switches then follow that free clock.
+
+
+1. Install
+----------
+1. Close OBS.
+2. Either install the suite (Palette Director and Scene Director in one step:
+   director-1.1.0-windows-x64.zip from
+   https://github.com/EnZhm/director/releases) or install Palette Director 1.2.0 on its
+   own first, then this plugin. With either route the folder
+   C:\ProgramData\obs-studio\plugins\palette-director must be there and hold 1.1.0 or
+   newer.
+3. If an older Clip Director is installed, delete
+     C:\ProgramData\obs-studio\plugins\clip-director
+   BEFORE copying this one: both register the same source id.
+4. Unzip scene-director-2.0.0-windows-x64.zip and copy the folder "scene-director" into
+     C:\ProgramData\obs-studio\plugins\
+   so that these files exist:
+     C:\ProgramData\obs-studio\plugins\scene-director\bin\64bit\scene-director.dll
+     C:\ProgramData\obs-studio\plugins\scene-director\data\locale\en-US.ini
+5. Start OBS. Help > Log Files > View Current Log should show
+     [scene-director] plugin loaded successfully (version 2.0.0)
+     [palette-director] plugin loaded successfully (version 1.2.0)
+
+
+2. First run: the playlist workflow
+-----------------------------------
+The playlist lives in Synesthesia. Scene Director only ever sends two messages - Next and
+Previous - and Synesthesia moves the playlist when it hears them.
+
+  DJ mixer -> OBS audio -> Palette Director clock -> Scene Director -> MIDI
+                                                    -> virtual port -> Synesthesia playlist
+
+1. Build the playlist in Synesthesia with the scenes in the order you want, and set the
+   playlist's own transition as you like.
+2. Install a virtual MIDI port (loopMIDI is the usual one; a Windows MIDI Services loopback
+   pair works too).
+3. In OBS add a "Scene Director" source to a scene. Leave Clock on "Follow Palette
+   Director" so the switches land on the same grid as everything else.
+4. Open the Scene Director dock (Docks menu > "Scene Director"). Under MIDI out press
+   Rescan and pick the virtual port. The link chip turns green ("Port open") when the port
+   is open.
+5. Teach Synesthesia the two messages:
+     a. Open Synesthesia's MIDI settings and enable that port as a MIDI input.
+     b. Go to Synesthesia's MIDI mapping and enter MIDI learn on the playlist's "next"
+        control.
+     c. Press Next in the Scene Director dock. Synesthesia learns the message.
+     d. Do the same for "previous" with Prev, then save Synesthesia's mapping.
+6. Play some music. On the next breakdown and on the next drop, Scene Director sends Next
+   on the beat and the playlist moves by itself. Press Next or Prev in the dock (or use the
+   two hotkeys) to move it by hand at any time.
+
+
+3. The Scene Director dock
+--------------------------
+Docks menu > "Scene Director".
+
+- Top: the Scene Director source, the clock (PD = following Palette Director, free = not)
+  and the section chip (GROOVE / BREAKDOWN / DROP).
+- Link: the link chip and the MIDI out device, with a Rescan button.
+    "Port open"         green  a port is open
+    "Port not found"    red    the device is not connected right now; it is retried quietly
+    "No port selected"  grey
+- Next / Prev: send the message now. A manual switch always fires, and restarts the
+  cooldown.
+- Automatic switches: breakdown start, drop downbeat, and optionally every phrase downbeat
+  during a groove.
+- Cooldown (beats): after a switch, an automatic switch this close to it is held back.
+  Default 16. Manual switches always go through.
+- Scene lead (ms): send the automatic message this much early, to cover Synesthesia's own
+  scene-load time. Default 0. It applies to the automatic switches only; the target beat
+  does not move.
+- Messages: the Next and Previous messages.
+    Type: Note or Control change.
+    Channel: 1-16.
+    Number: 0-127.
+  A Note is sent at velocity 127, with its note off 50 ms later. A Control change is sent
+  with value 127. The defaults are Next = Note, channel 16, number 60 and
+  Prev = Note, channel 16, number 59.
+- Log: every switch with its beat, reason and the packed MIDI bytes, one per line.
+
+Everything is saved with the scene collection, in the Scene Director source. The same
+settings are also in the source's properties (right-click the source > Properties).
+The dock drives the first Scene Director source in the scene collection; its refresh timer
+also steps the scheduler, so the automatic switches keep working when the source is not in
+the active scene.
+
+
+4. When it switches
+-------------------
+- Breakdown starts: Next at the start of the breakdown crossfade (the next bar line). This
+  is detected, not predicted, so it lands on the beat the breakdown begins.
+- Drop downbeat: Next on the drop downbeat itself.
+- During a groove: nothing at all, unless "Send Next every phrase during a groove" is on;
+  then Next goes out on every phrase downbeat (16 or 32 beats, whatever Palette Director
+  reports).
+- Cooldown: an automatic switch inside the cooldown after the previous switch is held back
+  and written to the log as "suppress". Manual Next / Prev always fire and restart the
+  cooldown.
+- Scene lead: when it is above 0, the automatic message is sent that many milliseconds
+  early (converted to beats at the current BPM), so Synesthesia has time to load the scene
+  before the beat arrives. The log marks it "(early)".
+Only Next is sent automatically. Prev is always a manual action.
+
+
+5. The messages
+---------------
+Both messages are plain short MIDI messages sent over WinMM (no driver or library to
+install):
+  Note:           status 0x90 (note on) at velocity 127, then 0x80 (note off) 50 ms later.
+  Control change: status 0xB0 with value 127.
+The WinMM payload is packed as the usual DWORD (byte 0 status, byte 1 data 1, byte 2 data
+2), so Note, channel 16, number 60 at velocity 127 is 0x7F3C9F. The log prints it in hex.
+
+The device is picked by name. If it is unplugged, or if a virtual port starts after OBS,
+Scene Director re-resolves the name and opens it again quietly, so the link recovers on its
+own once the port is back.
+
+
+6. MIDI Director
+----------------
+Docks menu > "MIDI Director". It maps a MIDI note or control change from a controller to an
+OBS hotkey in the suite.
+- Device: pick the MIDI input, with a Rescan button and a light that flashes on incoming
+  messages.
+- Learn: pick the hotkey in the searchable list, choose the mode (press / release or
+  toggle), press Learn (the button becomes Cancel: it arms and waits), then move a control.
+  The first press binds it; there is no popup.
+- Mapping table: control, target and mode, with a Remove button per row; saved with the
+  scene collection.
+- Hotkey list: every hotkey OBS knows about (frontend, source and so on), searchable by
+  name or description. It includes the suite's own: Palette Director (Force off / on,
+  Pause, Rotate colours, PANIC, next / previous palette, palette 1-8 go live) and the Music
+  clock commands (Phrase is now, Drop now, Force breakdown, Tap tempo, Lock BPM, Nudge back
+  / forward); Scene Director (Next scene, Previous scene).
+- Monitor: the last MIDI message received, with a count and a short history.
+A useful mapping is one pad to "Scene Director: Next scene" and another to "Scene Director:
+Previous scene", so the playlist can be moved from the controller.
+Mappings are saved with the scene collection.
+
+
+7. Upgrading from Clip Director 1.1.0
+-------------------------------------
+- Delete C:\ProgramData\obs-studio\plugins\clip-director BEFORE copying scene-director:
+  both register the same source id.
+- Existing "Clip Director" sources keep loading: the old source id (clip_director_source)
+  is still registered as a deprecated alias of Scene Director. It is hidden from the Add
+  menu, but any scene collection that holds one loads unchanged. Such a source renders
+  nothing now.
+- Remove any Spout filter that was on such a source: it no longer produces a picture. The
+  Spout input that carries Synesthesia into OBS is unaffected.
+- Clip playback is gone: clip folders, the cut rules, level evening, brightness inversion,
+  thumbnails and the ingest tool tools\cd-ingest.py.
+- The Synesthesia OSC tab is gone, and with it OSC scene control (Auto, the scene pools,
+  the OSC link chip, Import from Synesthesia).
+- MIDI Director mappings to the removed hotkeys are dropped when they are triggered:
+  cd_skip, cd_hold, cd_ban, cd_syn_next_scene, cd_syn_hold_scene, cd_syn_bang. Rebind those
+  controls to scene_director_next / scene_director_prev.
+- Your old settings are kept, not deleted: a scene collection written by 1.1.0 still
+  carries the clip and OSC keys, and Scene Director ignores them and leaves them in place.
+
+
+8. Troubleshooting
+------------------
+- No dock in the Docks menu: the plugin did not load. Check the log for the two "plugin
+  loaded successfully" lines and the folder layout in section 1.
+- The link chip stays grey: no MIDI out device is selected. Press Rescan and pick the
+  virtual port.
+- The link chip is red ("Port not found"): the port is not running. Start loopMIDI (or
+  whatever creates the port) and it is picked up automatically; nothing has to be
+  re-selected.
+- Nothing switches on a breakdown or a drop: check the automatic-switch toggles in the dock,
+  and check the cooldown: a switch within the cooldown of the previous one is held back on
+  purpose. The log says "suppress" when that happens.
+- The playlist does not move when Scene Director sends: the message is going out (the log
+  shows the bytes), but Synesthesia is not listening. Enable the port as a MIDI input in
+  Synesthesia's MIDI settings, and check that the MIDI learn on the playlist's next /
+  previous control was saved.
+- Everything fires twice: the same control is bound both to a Scene Director hotkey (via
+  MIDI Director) and to the playlist control in Synesthesia. Bind it in one place only.
+- The clock shows "free": no Palette Lock found, or Palette Director is older than 1.1.
+  Check the log for "clock following Palette Director".
+- Scenes arrive late: raise Scene lead so the message is sent earlier.
+- The old source shows nothing: that is correct after the upgrade; it renders nothing by
+  design. Remove a Spout filter from it if one is still there.
+
+
+9. Uninstall
+------------
+Close OBS, then delete
+  C:\ProgramData\obs-studio\plugins\scene-director
+and (if it is still there from an older install)
+  C:\ProgramData\obs-studio\plugins\clip-director
+Your scene collections and sets are kept.
+
+
+10. Licence
+-----------
+GPL-2.0. Source and per-component docs:
+  https://github.com/EnZhm/director
+  https://github.com/EnZhm/palette-director
+  https://github.com/EnZhm/scene-director
