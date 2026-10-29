@@ -25,9 +25,10 @@ Signal chain: music -> Music Director (the clock) -> palette (Palette Director) 
 ## 2. The clock (Music Director)
 
 - Singleton. Music Director registers `director_clock` on the global proc handler (contract and field list: `include/director-clock.h`). Before registering it calls the proc; if it already answers, this copy logs an error and registers nothing.
-- The fields keep the Palette Director 1.x clock style, so a follower changes only its source: `pd_clock_read(id, source, filter, &k)` becomes `director_clock_read(&k)`. New: `section_seq`, `section_beat`, `epoch`, `bass`. Not in the contract: instance ids, `filter_enabled`, `drop_cycle*` (palette-owned, see 4.4).
+- The fields keep the Palette Director 1.x clock style, so a follower changes only its source: `pd_clock_read(id, source, filter, &k)` becomes `director_clock_read(&k)`. New: `section_seq`, `section_beat`, `section_forced`, `epoch`, `bass`. Not in the contract: instance ids, `filter_enabled`, `drop_cycle*` (palette-owned, see 4.4).
 - The core moves from Palette Director 1.2.0 unchanged: `analysis`, `beat_tracker`, `section_state`, `command_queue`, `rng`, the clock half of `director.cpp`, and `clock_api.h` (AudioClockMap, clock_extrapolate). The same audio gives the same beat grid and section decisions as PD 1.2.0.
-- `section_seq` increments on every section change, natural or forced; `section_beat` is the beat the section starts on. Drop now / Force breakdown land on the next beat, as in PD 1.2.0. `epoch` increments when the grid is re-anchored (Phrase now, tap, nudge, audio source change, reset).
+- `section_seq` increments on every section change, natural or forced; `section_beat` is the beat the section starts on; `section_forced` is true when the current section came from Drop now / Force breakdown.
+- One landing beat: on every section edge, the palette change (PD), the clip cut (CD) and the Synesthesia Next (SD) all land on `section_beat`. Every follower logs `seq` and `beat` so the gate can compare them. Drop now / Force breakdown land on the next beat, as in PD 1.2.0. `epoch` increments when the grid is re-anchored (Phrase now, tap, nudge, audio source change, reset).
 - The worker thread publishes the snapshot about every 5 ms.
 - Log prefix `[music-director]`. Each section change logs `section -> <GROOVE|BREAKDOWN|DROP> seq=<S> beat=<B> (<natural|forced>)`.
 
@@ -75,6 +76,7 @@ Music Director never writes Palette Lock settings. No Palette Lock and no key me
 - From 1.1.0, remove the Synesthesia OSC tab and transport, and the MIDI Director dock and MIDI input.
 - The clock comes from `director_clock_read()` through `director_follow::Follower`. The `clock_source` setting key stays in saved data but is no longer shown.
 - Stutter reads `palette_director_drop_cycle` when PD is present; without PD, stutter stays off.
+- Three decks: the next clip of the current section, an armed BREAKDOWN clip (while not in a breakdown) and an armed DROP clip (while not in a drop). Each is loaded, seeked and paused ahead of time, so a breakdown or drop edge cuts at once on `section_beat` (the breakdown transition starts on that beat). After an edge the used deck is re-armed. A return to GROOVE keeps the bar-line rule (next bar line at least `preroll_beats` ahead).
 - Unchanged: source id `clip_director_source`, dock `clip-director-dock`, CD hotkeys and all clip settings. 1.1.0 collections load EXACT.
 - No MD: idle, one log line, status "Waiting for Music Director".
 - Log `[clip-director] cut ... seq=<S> beat=<B>` for section-triggered cuts.
@@ -85,6 +87,8 @@ Music Director never writes Palette Lock settings. No Palette Lock and no key me
 - Scene Director sends Synesthesia playlist Next/Prev over MIDI out (`common/midi`). It keeps the MIDI out device, the Next/Prev notes and channel, the `scene_director_next/prev` hotkeys, the triggers (breakdown, drop, groove phrase), cooldown and lead. The MIDI Director dock moves to Music Director.
 - The clock comes from `director_clock_read()` through `director_follow::Follower`; the `clock_source` key is kept and hidden.
 - With several SD sources, one section edge sends exactly ONE Next, through a process-wide guard keyed by `section_seq`.
+- Breakdown and drop Nexts go out on `section_beat` (minus the configured lead), the same beat as the palette change and the clip cut.
+- Cooldown (16 beats by default) applies only to AUTOMATIC section edges. Forced sections (`section_forced`: Force breakdown, Drop now) and manual Next/Prev (dock buttons, hotkeys, MIDI) bypass it. Tests cover both paths.
 - No MD: idle, one log line.
 - Log `[scene-director] MIDI Next seq=<S> beat=<B>` on each section-triggered Next.
 

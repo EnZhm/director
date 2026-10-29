@@ -25,6 +25,9 @@ Check `api_version` >= 1.
                                 value it handled.
       out int   section_beat    the beat the current section started on (the downbeat every follower
                                 aims at; equal across followers by construction)
+      out bool  section_forced  the current section came from a command (Drop now / Force breakdown),
+                                not from detection. Followers may treat forced edges differently
+                                (Scene Director: forced edges bypass its automatic-switch cooldown).
       out int   epoch           +1 whenever the beat grid is re-anchored (Phrase now, tap, nudge,
                                 audio source change, reset). Followers re-sync beat/phrase tracking
                                 on a change and do NOT fire catch-up beat/phrase edges for it.
@@ -71,7 +74,7 @@ struct director_clock {
 	double beats, beats_now, bpm, confidence, bass;
 	long long beat, phrase, section_seq, section_beat, epoch, kicks, sample_ts_ns, now_ns;
 	int phrase_beats, section, ts_source;
-	bool silent, paused, enabled;
+	bool section_forced, silent, paused, enabled;
 };
 
 /* false if Music Director is not loaded or too old. */
@@ -99,6 +102,7 @@ static inline bool director_clock_read(struct director_clock *out)
 		out->section = (int)calldata_int(&cd, "section");
 		out->section_seq = calldata_int(&cd, "section_seq");
 		out->section_beat = calldata_int(&cd, "section_beat");
+		out->section_forced = calldata_bool(&cd, "section_forced");
 		out->epoch = calldata_int(&cd, "epoch");
 		out->kicks = calldata_int(&cd, "kicks");
 		out->silent = calldata_bool(&cd, "silent");

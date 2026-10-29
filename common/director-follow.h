@@ -33,6 +33,7 @@ struct Sample {
 	int section = 0;
 	int64_t section_seq = 0;
 	int64_t section_beat = 0;
+	bool section_forced = false;
 	int64_t epoch = 0;
 };
 
@@ -44,6 +45,7 @@ struct Edges {
 	Section new_section = Section::Groove;
 	int64_t section_beat = 0;
 	int64_t section_seq = 0;
+	bool section_forced = false; // the new section came from a command, not detection
 	bool phrase = false;
 	int64_t phrase_no = 0;
 	bool beat = false;
@@ -76,6 +78,7 @@ public:
 			e.new_section = static_cast<Section>(s.section);
 			e.section_beat = s.section_beat;
 			e.section_seq = s.section_seq;
+			e.section_forced = s.section_forced;
 			seq_ = s.section_seq;
 		}
 		if (s.epoch != epoch_) {

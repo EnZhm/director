@@ -107,3 +107,18 @@ TEST_CASE("Music Director lost and found again: no phantom section edge")
 	CHECK_FALSE(e.section);
 	CHECK(f.handled_section_seq() == 9);
 }
+
+TEST_CASE("a forced section edge carries the forced flag")
+{
+	Follower f;
+	f.update(clock(10, 0, 0, 1, 0, 1));
+	Sample s = clock(12, 0, 1, 2, 12, 1);
+	s.section_forced = true;
+	Edges e = f.update(s);
+	CHECK(e.section);
+	CHECK(e.section_forced);
+	s = clock(20, 0, 2, 3, 20, 1);
+	e = f.update(s);
+	CHECK(e.section);
+	CHECK_FALSE(e.section_forced);
+}
