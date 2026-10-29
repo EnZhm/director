@@ -58,12 +58,17 @@ target_sources(
     src/director/migration.cpp
     src/dock/dock-widgets.cpp
     src/dock/music-dock.cpp
+    src/dock/midi-director-dock.cpp
+    ${MD_MIDI}/director-midi.cpp
+    ${MD_MIDI}/midi_map.cpp
+    ${MD_MIDI}/midi_msg.cpp
 )
 target_include_directories(
   ${CMAKE_PROJECT_NAME}
   PRIVATE
     src
     ${MD_ROOT}/include
+    ${MD_MIDI}
 )
 
 if(HAVE_FRONTEND_API)
