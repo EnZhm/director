@@ -48,6 +48,7 @@ struct ClockState {
 	int phrase_beats = 32;
 	uint64_t section_seq = 0;    // +1 on EVERY section change, natural or forced
 	uint64_t section_beat = 0;   // the beat the current section started on
+	bool section_forced = false; // the current section came from Drop now / Force breakdown
 	uint64_t epoch = 0;          // +1 whenever the beat grid is re-anchored
 	uint32_t kicks = 0;          // detected kick count (the dock flashes its kick light on change)
 	bool silent = true;          // feed is silent (fallback BPM in use)

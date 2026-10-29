@@ -82,6 +82,7 @@ struct MusicClock::Impl {
 		pending_section_ = -1;
 		clock_s_ = 0.0;
 		section_seq_ = 0;
+		section_forced_ = false;
 		section_beat_ = 0;
 		epoch_ = 0;
 		CommandMsg m;
@@ -210,6 +211,7 @@ struct MusicClock::Impl {
 				cur_section_ = sec;
 				section_.force(sec, b);
 				section_seq_++;
+				section_forced_ = true;
 				section_beat_ = b;
 				ClockEvent e;
 				e.type = ClockEvent::Type::SectionChange;
@@ -236,6 +238,7 @@ struct MusicClock::Impl {
 			if (sec != cur_section_) {
 				cur_section_ = sec;
 				section_seq_++;
+				section_forced_ = false;
 				section_beat_ = b;
 				ClockEvent e;
 				e.type = ClockEvent::Type::SectionChange;
@@ -283,6 +286,7 @@ struct MusicClock::Impl {
 		st.beat_frac = beats - std::floor(beats);
 		st.phrase_beats = phrase_beats_;
 		st.section_seq = section_seq_;
+		st.section_forced = section_forced_;
 		st.section_beat = section_beat_;
 		st.epoch = epoch_;
 		st.enabled = cfg_.enabled;
@@ -331,6 +335,7 @@ struct MusicClock::Impl {
 	int pending_section_ = -1;
 	double clock_s_ = 0.0;
 	uint64_t section_seq_ = 0;
+	bool section_forced_ = false;
 	uint64_t section_beat_ = 0;
 	uint64_t epoch_ = 0;
 };

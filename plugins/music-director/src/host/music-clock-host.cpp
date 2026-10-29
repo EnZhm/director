@@ -556,6 +556,7 @@ void proc_clock(void *, calldata_t *cd)
 	calldata_set_int(cd, "section", static_cast<int>(s.st.section));
 	calldata_set_int(cd, "section_seq", (long long)s.st.section_seq);
 	calldata_set_int(cd, "section_beat", (long long)s.st.section_beat);
+	calldata_set_bool(cd, "section_forced", s.st.section_forced);
 	calldata_set_int(cd, "epoch", (long long)s.st.epoch);
 	calldata_set_int(cd, "kicks", (long long)s.st.kicks);
 	calldata_set_float(cd, "bass", s.st.bass);
@@ -585,13 +586,15 @@ void register_clock_proc()
 				   "this copy registers nothing");
 		return;
 	}
-	proc_handler_add(ph,
-			 "void director_clock(out bool ok, out int api_version, out float beats, out float beats_now, "
-			 "out float bpm, out float confidence, out int beat, out int phrase, out int phrase_beats, "
-			 "out int section, out int section_seq, out int section_beat, out int epoch, out int kicks, "
-			 "out float bass, out bool silent, out bool paused, out bool enabled, out int sample_ts_ns, "
-			 "out int ts_source, out int now_ns)",
-			 proc_clock, nullptr);
+	proc_handler_add(
+		ph,
+		"void director_clock(out bool ok, out int api_version, out float beats, out float beats_now, "
+		"out float bpm, out float confidence, out int beat, out int phrase, out int phrase_beats, "
+		"out int section, out int section_seq, out int section_beat, out bool section_forced, out int epoch, "
+		"out int kicks, "
+		"out float bass, out bool silent, out bool paused, out bool enabled, out int sample_ts_ns, "
+		"out int ts_source, out int now_ns)",
+		proc_clock, nullptr);
 	obs_log(LOG_INFO, "[music-director] clock proc registered (director_clock v%d)", DIRECTOR_CLOCK_API_VERSION);
 }
 
