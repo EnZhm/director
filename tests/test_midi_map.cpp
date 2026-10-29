@@ -167,20 +167,20 @@ TEST_CASE("mapping: one control -> one target, rebinding replaces")
 {
 	Map m;
 	const Control c = control(Type::Note, 1, 36);
-	m.bind(c, target("cd_skip", Registerer::Frontend, "", "Skip"));
+	m.bind(c, target("sample_next", Registerer::Frontend, "", "Sample next"));
 	REQUIRE(m.size() == 1);
 	REQUIRE(m.bound(c));
 	REQUIRE(m.find(c) != nullptr);
-	CHECK(m.find(c)->target.name == "cd_skip");
+	CHECK(m.find(c)->target.name == "sample_next");
 	CHECK(m.find(c)->mode == Mode::Momentary);
 
-	m.bind(c, target("cd_ban"), Mode::Toggle);
+	m.bind(c, target("sample_prev"), Mode::Toggle);
 	CHECK(m.size() == 1);
-	CHECK(m.find(c)->target.name == "cd_ban");
+	CHECK(m.find(c)->target.name == "sample_prev");
 	CHECK(m.find(c)->mode == Mode::Toggle);
 
 	// a second control may drive the same hotkey
-	m.bind(control(Type::Control, 1, 7), target("cd_ban"));
+	m.bind(control(Type::Control, 1, 7), target("sample_prev"));
 	CHECK(m.size() == 2);
 
 	CHECK(m.unbind(c));
@@ -194,12 +194,12 @@ TEST_CASE("mapping: one control -> one target, rebinding replaces")
 TEST_CASE("notes pass press and release through")
 {
 	Map m;
-	m.bind(control(Type::Note, 1, 36), target("cd_skip"));
+	m.bind(control(Type::Note, 1, 36), target("sample_next"));
 
 	std::vector<Event> e = m.handle(parsed({0x90, 36, 100}));
 	REQUIRE(e.size() == 1);
 	CHECK(e[0].pressed);
-	CHECK(e[0].target.name == "cd_skip");
+	CHECK(e[0].target.name == "sample_next");
 
 	e = m.handle(parsed({0x80, 36, 0}));
 	REQUIRE(e.size() == 1);
@@ -256,7 +256,7 @@ TEST_CASE("control change is edge-triggered at 64")
 TEST_CASE("toggle mode flips the target on press edges")
 {
 	Map m;
-	m.bind(control(Type::Control, 1, 20), target("cd_hold"), Mode::Toggle);
+	m.bind(control(Type::Control, 1, 20), target("sample_toggle"), Mode::Toggle);
 
 	std::vector<Event> e = m.handle(parsed({0xB0, 20, 127}));
 	REQUIRE(e.size() == 1);
@@ -274,7 +274,7 @@ TEST_CASE("toggle mode flips the target on press edges")
 
 	// a note in toggle mode flips on note-on and ignores note-off
 	Map n;
-	n.bind(control(Type::Note, 1, 36), target("cd_hold"), Mode::Toggle);
+	n.bind(control(Type::Note, 1, 36), target("sample_toggle"), Mode::Toggle);
 	e = n.handle(parsed({0x90, 36, 1}));
 	REQUIRE(e.size() == 1);
 	CHECK(e[0].pressed);
@@ -287,7 +287,7 @@ TEST_CASE("toggle mode flips the target on press edges")
 TEST_CASE("json round trip keeps control, target identity and mode")
 {
 	Map m;
-	m.bind(control(Type::Note, 1, 36), target("cd_skip", Registerer::Frontend, "", "Skip to the next clip"));
+	m.bind(control(Type::Note, 1, 36), target("sample_next", Registerer::Frontend, "", "Sample next"));
 	m.bind(control(Type::Control, 3, 7), target("pd_tap_tempo", Registerer::Frontend, "", "Tap tempo"),
 	       Mode::Toggle);
 	m.bind(control(Type::Note, 16, 60),
@@ -322,7 +322,7 @@ TEST_CASE("json: empty map, bad input, skipped rows")
 	CHECK(empty.empty());
 
 	Map m;
-	m.bind(control(Type::Note, 1, 36), target("cd_skip"));
+	m.bind(control(Type::Note, 1, 36), target("sample_next"));
 	const std::string good = m.to_json();
 
 	std::string err;
@@ -337,7 +337,7 @@ TEST_CASE("json: empty map, bad input, skipped rows")
 
 	// rows that are out of range or incomplete are dropped, the rest survives
 	REQUIRE(m.from_json("{\"version\":1,\"mappings\":["
-			    "{\"type\":\"note\",\"channel\":1,\"number\":36,\"name\":\"cd_skip\"},"
+			    "{\"type\":\"note\",\"channel\":1,\"number\":36,\"name\":\"sample_next\"},"
 			    "{\"type\":\"cc\",\"channel\":17,\"number\":7,\"name\":\"x\"},"
 			    "{\"type\":\"cc\",\"channel\":1,\"number\":200,\"name\":\"x\"},"
 			    "{\"type\":\"wave\",\"channel\":1,\"number\":1,\"name\":\"x\"},"
@@ -361,12 +361,12 @@ TEST_CASE("json: empty map, bad input, skipped rows")
 
 	// an unknown registerer falls back to the frontend instead of losing the row
 	REQUIRE(m.from_json("{\"version\":1,\"mappings\":[{\"type\":\"note\",\"channel\":1,\"number\":36,"
-			    "\"name\":\"cd_skip\",\"registerer\":\"astral\"}]}"));
+			    "\"name\":\"sample_next\",\"registerer\":\"astral\"}]}"));
 	CHECK(m.find(control(Type::Note, 1, 36))->target.registerer == Registerer::Frontend);
 
 	// non-ascii descriptions survive (localised hotkey names)
 	Map u;
-	u.bind(control(Type::Note, 1, 36), target("cd_skip", Registerer::Frontend, "", "Überspringen – 次へ"));
+	u.bind(control(Type::Note, 1, 36), target("sample_next", Registerer::Frontend, "", "Überspringen – 次へ"));
 	Map u2;
 	REQUIRE(u2.from_json(u.to_json()));
 	CHECK(u2.find(control(Type::Note, 1, 36))->target.description ==
@@ -380,10 +380,10 @@ TEST_CASE("learn: arm a target, the next control press binds it")
 	CHECK_FALSE(learn.armed());
 	CHECK(learn.target() == nullptr);
 
-	learn.arm(target("cd_skip", Registerer::Frontend, "", "Skip"));
+	learn.arm(target("sample_next", Registerer::Frontend, "", "Sample next"));
 	REQUIRE(learn.armed());
 	REQUIRE(learn.target() != nullptr);
-	CHECK(learn.target()->name == "cd_skip");
+	CHECK(learn.target()->name == "sample_next");
 
 	// a release does not bind
 	CHECK(learn.feed(parsed({0x90, 36, 0}), m) == nullptr);
@@ -394,10 +394,10 @@ TEST_CASE("learn: arm a target, the next control press binds it")
 	CHECK(*bound == control(Type::Note, 1, 36));
 	CHECK_FALSE(learn.armed());
 	REQUIRE(m.size() == 1);
-	CHECK(m.find(control(Type::Note, 1, 36))->target.name == "cd_skip");
+	CHECK(m.find(control(Type::Note, 1, 36))->target.name == "sample_next");
 
 	// once armed again, the next press lands wherever the user moves a control
-	learn.arm(target("cd_hold"), Mode::Toggle);
+	learn.arm(target("sample_toggle"), Mode::Toggle);
 	REQUIRE(learn.armed());
 	bound = learn.feed(parsed({0xB0, 1, 127}), m);
 	REQUIRE(bound != nullptr);
@@ -405,13 +405,13 @@ TEST_CASE("learn: arm a target, the next control press binds it")
 	CHECK(m.find(control(Type::Control, 1, 1))->mode == Mode::Toggle);
 
 	// learning the same control again replaces the binding (one control -> one target)
-	learn.arm(target("cd_ban"));
+	learn.arm(target("sample_prev"));
 	REQUIRE(learn.feed(parsed({0x90, 36, 5}), m) != nullptr);
 	CHECK(m.size() == 2);
-	CHECK(m.find(control(Type::Note, 1, 36))->target.name == "cd_ban");
+	CHECK(m.find(control(Type::Note, 1, 36))->target.name == "sample_prev");
 
 	// cancel leaves nothing armed
-	learn.arm(target("cd_skip"));
+	learn.arm(target("sample_next"));
 	learn.cancel();
 	CHECK_FALSE(learn.armed());
 	CHECK(learn.feed(parsed({0x90, 42, 100}), m) == nullptr);

@@ -1,6 +1,6 @@
 /*
-Clip Director: MIDI Director dock (W4). Maps a MIDI control to any OBS hotkey, so the dock stays
-decoupled from the plugins it drives: bind a pad to cd_skip, pd_drop_now, cd_syn_bang - whatever the
+Scene Director: MIDI Director dock. Maps a MIDI control to any OBS hotkey, so the dock stays
+decoupled from the plugins it drives: bind a pad to pd_drop_now, scene_director_next - whatever the
 scene collection has - by identity (hotkey name + registerer).
 
 Layout: device picker + activity light, Learn (pick a hotkey from the searchable list, press Learn,
@@ -37,8 +37,8 @@ frames it into MIDI messages and triggers hotkeys from here.
 #include <vector>
 
 #include "core/midi_map.h"
-#include "obs/cd-hotkeys.h"
-#include "obs/cd-midi-input.h"
+#include "obs/sd-hotkeys.h"
+#include "obs/sd-midi.h"
 
 namespace {
 
@@ -169,7 +169,7 @@ public:
 		refresh_hotkeys(true);
 		rebuild_table();
 		obs_frontend_add_save_callback(save_callback, this);
-		show_status(cdmidi::available() ? no_device() : QString(obs_module_text("MidiStatus.NoBackend")));
+		show_status(sdmidi::available() ? no_device() : QString(obs_module_text("MidiStatus.NoBackend")));
 	}
 
 	~MidiDirectorDock() override
@@ -185,7 +185,7 @@ private:
 
 	void list_devices()
 	{
-		const std::vector<cdmidi::Device> found = cdmidi::devices();
+		const std::vector<sdmidi::Device> found = sdmidi::input_devices();
 		QStringList names;
 		names << obs_module_text("MidiDevice.None");
 		for (const auto &d : found)
@@ -243,8 +243,8 @@ private:
 	void refresh_hotkeys(bool force)
 	{
 		const QString filter = search_->text().trimmed();
-		std::vector<cdhotkey::Entry> shown;
-		for (const auto &entry : cdhotkey::list()) {
+		std::vector<sdhotkey::Entry> shown;
+		for (const auto &entry : sdhotkey::list()) {
 			const bool hit = filter.isEmpty() ||
 					 text_of(entry.description).contains(filter, Qt::CaseInsensitive) ||
 					 text_of(entry.name).contains(filter, Qt::CaseInsensitive) ||
@@ -334,7 +334,7 @@ private:
 			return;
 		}
 		for (const cd::midi::Event &event : map_.handle(m))
-			cdhotkey::trigger(hotkey_entry(event.target), event.pressed);
+			sdhotkey::trigger(hotkey_entry(event.target), event.pressed);
 	}
 
 	void flush_monitor()
@@ -413,7 +413,7 @@ private:
 			.arg(m.value);
 	}
 
-	static cd::midi::Target midi_target(const cdhotkey::Entry &entry)
+	static cd::midi::Target midi_target(const sdhotkey::Entry &entry)
 	{
 		cd::midi::Target target;
 		target.name = entry.name;
@@ -425,9 +425,9 @@ private:
 		return target;
 	}
 
-	static cdhotkey::Entry hotkey_entry(const cd::midi::Target &target)
+	static sdhotkey::Entry hotkey_entry(const cd::midi::Target &target)
 	{
-		cdhotkey::Entry entry;
+		sdhotkey::Entry entry;
 		entry.name = target.name;
 		entry.registerer = cd::midi::registerer_to_string(target.registerer);
 		entry.registerer_name = target.registerer_name;
@@ -473,11 +473,11 @@ private:
 	QTableWidget *table_;
 	QPlainTextEdit *monitor_;
 
-	cdmidi::Input input_;
+	sdmidi::Input input_;
 	cd::midi::Assembler assembler_;
 	cd::midi::Map map_;
 	cd::midi::Learn learn_;
-	std::vector<cdhotkey::Entry> targets_;
+	std::vector<sdhotkey::Entry> targets_;
 	QStringList hotkey_keys_;
 	QString pending_;
 	int pending_count_ = 0;
@@ -489,7 +489,7 @@ MidiDirectorDock *g_dock = nullptr;
 
 } // namespace
 
-extern "C" void clip_director_midi_dock_load(void)
+extern "C" void scene_director_midi_dock_load(void)
 {
 	auto *dock = new MidiDirectorDock();
 	if (!obs_frontend_add_dock_by_id(kDockId, obs_module_text("MidiDirector"), dock)) {
@@ -525,7 +525,7 @@ extern "C" void clip_director_midi_dock_load(void)
 #endif
 }
 
-extern "C" void clip_director_midi_dock_unload(void)
+extern "C" void scene_director_midi_dock_unload(void)
 {
 	/* OBS owns the widget handed to obs_frontend_add_dock_by_id: removing the dock destroys it. */
 	obs_frontend_remove_dock(kDockId);
@@ -534,8 +534,8 @@ extern "C" void clip_director_midi_dock_unload(void)
 
 #else
 
-extern "C" void clip_director_midi_dock_load(void) {}
+extern "C" void scene_director_midi_dock_load(void) {}
 
-extern "C" void clip_director_midi_dock_unload(void) {}
+extern "C" void scene_director_midi_dock_unload(void) {}
 
 #endif

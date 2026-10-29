@@ -1,5 +1,5 @@
 #pragma once
-// Clip Director core: MIDI -> hotkey mapping (W4 "MIDI Director"). Pure C++17, no libobs, no Qt.
+// Scene Director core: MIDI -> hotkey mapping (the "MIDI Director" dock). Pure C++17, no libobs, no Qt.
 //
 // The dock never talks to the sources directly: a MIDI control is bound to a *hotkey identity*
 // (name + registerer type/name + description) and the OBS layer triggers that hotkey. This keeps

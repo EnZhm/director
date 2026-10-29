@@ -1,6 +1,6 @@
-// Clip Director hotkeys (W4): Skip / Hold / Ban as frontend hotkeys, plus the listing and
-// triggering helpers the MIDI Director dock uses to drive any registered hotkey by identity.
-#include "cd-hotkeys.h"
+// Scene Director hotkeys: Next / Prev as frontend hotkeys, plus the listing and triggering helpers
+// the MIDI Director dock uses to drive any registered hotkey by identity.
+#include "sd-hotkeys.h"
 
 #include <obs-module.h>
 #include <obs.h>
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "obs/cd-api.h"
+#include "obs/sd-api.h"
 
 namespace {
 
@@ -55,8 +55,8 @@ std::string registerer_name_of(const obs_hotkey_t *key)
 
 bool collect(void *data, obs_hotkey_id, obs_hotkey_t *key)
 {
-	auto *out = static_cast<std::vector<cdhotkey::Entry> *>(data);
-	cdhotkey::Entry entry;
+	auto *out = static_cast<std::vector<sdhotkey::Entry> *>(data);
+	sdhotkey::Entry entry;
 	entry.name = text(obs_hotkey_get_name(key));
 	if (entry.name.empty())
 		return true; /* an unnamed hotkey cannot be stored in a mapping */
@@ -70,7 +70,7 @@ bool collect(void *data, obs_hotkey_id, obs_hotkey_t *key)
 }
 
 struct Match {
-	const cdhotkey::Entry *want = nullptr;
+	const sdhotkey::Entry *want = nullptr;
 	obs_hotkey_id id = OBS_INVALID_HOTKEY_ID;
 };
 
@@ -93,14 +93,14 @@ bool matches(void *data, obs_hotkey_id id, obs_hotkey_t *key)
 
 using Action = void (*)(obs_source_t *source, bool pressed);
 
-// A hotkey acts on the first Clip Director source of the scene collection: OBS hotkeys are global
+// A hotkey acts on the first Scene Director source of the scene collection: OBS hotkeys are global
 // while the dock picks its own source, and one director drives the set.
 void run_on_director(Action action, bool pressed)
 {
 	obs_source_t *director = nullptr;
 	obs_enum_sources(
 		[](void *data, obs_source_t *source) {
-			if (!cdapi::is_clip_director(source))
+			if (!sdapi::is_scene_director(source))
 				return true;
 			*(obs_source_t **)data = obs_source_get_ref(source);
 			return false;
@@ -112,29 +112,22 @@ void run_on_director(Action action, bool pressed)
 	obs_source_release(director);
 }
 
-/* cd_skip: cut to the next clip on the next beat (the dock's Skip button). */
-void action_skip(obs_source_t *source, bool pressed)
+/* scene_director_next: switch the playlist on to the next scene (the dock's Next button). */
+void action_next(obs_source_t *source, bool pressed)
 {
 	if (pressed)
-		cdapi::skip(source);
+		sdapi::manual_next(source);
 }
 
-/* cd_hold: pressed holds the clip, released resumes normal cuts. Momentary on purpose: the dock's
- * Hold button toggles, a MIDI pad or an OBS hotkey key is held down. */
-void action_hold(obs_source_t *source, bool pressed)
-{
-	cdapi::set_hold(source, pressed);
-}
-
-/* cd_ban: ban the clip on screen and skip it (the dock's Ban button). */
-void action_ban(obs_source_t *source, bool pressed)
+/* scene_director_prev: back to the previous scene (the dock's Prev button). */
+void action_prev(obs_source_t *source, bool pressed)
 {
 	if (pressed)
-		cdapi::ban_live(source);
+		sdapi::manual_prev(source);
 }
 
-Action g_actions[] = {action_skip, action_hold, action_ban};
-obs_hotkey_id g_ids[] = {OBS_INVALID_HOTKEY_ID, OBS_INVALID_HOTKEY_ID, OBS_INVALID_HOTKEY_ID};
+Action g_actions[] = {action_next, action_prev};
+obs_hotkey_id g_ids[] = {OBS_INVALID_HOTKEY_ID, OBS_INVALID_HOTKEY_ID};
 bool g_registered = false;
 
 void hotkey_callback(void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -146,7 +139,7 @@ void hotkey_callback(void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 } // namespace
 
-namespace cdhotkey {
+namespace sdhotkey {
 
 std::vector<Entry> list()
 {
@@ -182,25 +175,23 @@ bool trigger(const Entry &entry, bool pressed)
 	return true;
 }
 
-} // namespace cdhotkey
+} // namespace sdhotkey
 
-extern "C" void clip_director_hotkey_load(void)
+extern "C" void scene_director_hotkey_load(void)
 {
 #if defined(ENABLE_FRONTEND_API)
 	if (g_registered)
 		return;
-	g_ids[0] = obs_hotkey_register_frontend(cdhotkey::kSkip, obs_module_text("Hotkey.Skip"), hotkey_callback,
+	g_ids[0] = obs_hotkey_register_frontend(sdhotkey::kNext, obs_module_text("Hotkey.Next"), hotkey_callback,
 						&g_actions[0]);
-	g_ids[1] = obs_hotkey_register_frontend(cdhotkey::kHold, obs_module_text("Hotkey.Hold"), hotkey_callback,
+	g_ids[1] = obs_hotkey_register_frontend(sdhotkey::kPrev, obs_module_text("Hotkey.Prev"), hotkey_callback,
 						&g_actions[1]);
-	g_ids[2] = obs_hotkey_register_frontend(cdhotkey::kBan, obs_module_text("Hotkey.Ban"), hotkey_callback,
-						&g_actions[2]);
 	g_registered = true;
-	obs_log(LOG_INFO, "hotkeys registered: %s, %s, %s", cdhotkey::kSkip, cdhotkey::kHold, cdhotkey::kBan);
+	obs_log(LOG_INFO, "hotkeys registered: %s, %s", sdhotkey::kNext, sdhotkey::kPrev);
 #endif
 }
 
-extern "C" void clip_director_hotkey_unload(void)
+extern "C" void scene_director_hotkey_unload(void)
 {
 #if defined(ENABLE_FRONTEND_API)
 	if (!g_registered)
