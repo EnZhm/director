@@ -95,7 +95,7 @@ void SwitchScheduler::schedule(SwitchEvent::Reason reason, double at_beat, doubl
 		if (p.reason == reason && std::fabs(p.at_beat - at_beat) < 1e-6)
 			return; /* already planned */
 	}
-	pending_.push_back(Pending{reason, at_beat, send_at, section_edge, section_seq, section_beat});
+	pending_.push_back(Pending{reason, at_beat, send_at, section_edge, section_seq, section_beat, forced});
 	char buf[192];
 	std::snprintf(buf, sizeof(buf), "%9.3f plan     %-15s at %.3f (send %.3f) | %s", last_beats_,
 		      SwitchEvent{reason, at_beat, send_at}.reason_name(), at_beat, send_at, why);
@@ -216,10 +216,11 @@ SwitchEvent SwitchScheduler::manual(SwitchEvent::Reason reason, const ClockSampl
 	last_switch_beat_ = clk.beats;
 	switched_ = true;
 	/* restart the cooldown: anything automatic that now falls inside it is dropped. A manual
-	 * switch itself always fires: it bypasses the cooldown by construction. */
+	 * switch itself always fires: it bypasses the cooldown by construction. A pending FORCED
+	 * section edge (Force breakdown / Drop now) also bypasses it, so it is kept. */
 	const double until = clk.beats + std::max(0, cfg_.cooldown_beats);
 	pending_.erase(std::remove_if(pending_.begin(), pending_.end(),
-				      [until](const Pending &p) { return p.at_beat < until - 1e-9; }),
+				      [until](const Pending &p) { return !p.forced && p.at_beat < until - 1e-9; }),
 		       pending_.end());
 	char buf[160];
 	std::snprintf(buf, sizeof(buf), "%9.3f manual   %-15s (bypass cooldown, restart %.0f beats)", clk.beats,

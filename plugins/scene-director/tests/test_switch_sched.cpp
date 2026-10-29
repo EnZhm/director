@@ -353,3 +353,22 @@ TEST_CASE("the log records every decision")
 	CHECK(planned);
 	CHECK(suppressed);
 }
+
+TEST_CASE("cooldown: a manual Next does not cancel a pending forced section")
+{
+	SwitchConfig cfg;
+	cfg.cooldown_beats = 16;
+	SwitchScheduler s(cfg);
+	s.tick(at(30.0, Section::Groove));
+	/* Drop now at beat 39.0: the forced drop lands on beat 40, so its Next is still pending */
+	const std::vector<SwitchEvent> early = s.tick(edge(39.0, Section::Drop, 1, 40, /*forced=*/true));
+	bool drop = false;
+	for (const SwitchEvent &e : early)
+		drop |= e.reason == SwitchEvent::Reason::Drop;
+	/* a manual Next before the landing beat restarts the cooldown */
+	s.manual_next(edge(39.2, Section::Drop, 1, 40, true));
+	for (double b = 39.25; b <= 40.5; b += 0.25)
+		for (const SwitchEvent &e : s.tick(edge(b, Section::Drop, 1, 40, true)))
+			drop |= e.reason == SwitchEvent::Reason::Drop && e.section_seq == 1;
+	CHECK(drop);
+}

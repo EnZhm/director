@@ -601,6 +601,10 @@ void on_event(CdSource *c, const cd::SchedEvent &e)
 			obs_log(LOG_INFO, "cut %s seq=%lld beat=%lld", sec_name_up(e.section), (long long)e.section_seq,
 				(long long)std::llround(e.at_beat));
 		if (!c->decks[d].ready) {
+			/* the clip is still loading: the cut waits for it, so it lands late (logged when it does) */
+			if (e.section_edge)
+				obs_log(LOG_WARNING, "cut %s seq=%lld deferred: deck %d not ready",
+					sec_name_up(e.section), (long long)e.section_seq, d);
 			c->deferred = true;
 			c->deferred_ev = e;
 			return;
@@ -815,6 +819,10 @@ void cd_tick(void *data, float seconds)
 		if (d < 0) {
 			c->deferred = false;
 		} else if (c->decks[d].ready) {
+			if (c->deferred_ev.section_edge)
+				obs_log(LOG_WARNING, "cut %s seq=%lld landed late at beat %.2f (section_beat %lld)",
+					sec_name_up(c->deferred_ev.section), (long long)c->deferred_ev.section_seq,
+					c->beats, (long long)std::llround(c->deferred_ev.at_beat));
 			do_cut(c, c->deferred_ev);
 			c->deferred = false;
 		}

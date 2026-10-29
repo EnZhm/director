@@ -82,6 +82,7 @@ private:
 		bool section_edge = false;
 		int64_t section_seq = 0;
 		int64_t section_beat = 0;
+		bool forced = false; /* a forced section edge: a manual switch never drops it */
 	};
 
 	double lead_beats(double bpm) const;
