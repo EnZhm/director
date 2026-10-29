@@ -1,5 +1,5 @@
 /*
-Scene Director source: follows Palette Director's beat clock and sends MIDI Next / Prev to a
+Scene Director source: follows Music Director's clock and sends MIDI Next / Prev to a
 virtual MIDI port, so a Synesthesia playlist switches on the beat.
 
 The source renders nothing (0 x 0, a no-op video_render): it is the settings holder for the set. Its
@@ -7,10 +7,12 @@ video tick drives the scheduler, and the Scene Director dock drives the same sch
 refresh timer when the source is not being ticked (a source outside the active scene), so the
 feature works either way. The decision logic itself is pure: core/switch_sched.h.
 
-Two source ids are registered: scene_director_source (this plugin) and clip_director_source, the
-Clip Director 1.1.0 id, marked deprecated and hidden from the Add menu, so an existing scene
-collection keeps loading unchanged. The old clip keys in the settings are ignored and never
-deleted.
+One source id is registered: scene_director_source. The old clip_director_source alias is gone -
+Clip Director owns that id now - and the old clip keys in the settings are ignored, never deleted.
+
+With Music Director missing the source idles: no automatic switches, one log line, and the dock
+reads "Waiting for Music Director". Manual Next / Prev still work. With several Scene Director
+sources sharing the clock, one section edge sends exactly one Next (core/seq_guard.h).
 */
 
 #include <obs-module.h>
@@ -28,8 +30,10 @@ deleted.
 #include <string>
 #include <vector>
 
-#include "pd-clock-api.h"
+#include "director-clock.h"
+#include "director-follow.h"
 #include "midi_msg.h"
+#include "core/seq_guard.h"
 #include "core/settings.h"
 #include "core/switch_sched.h"
 #include "core/types.h"
@@ -39,14 +43,15 @@ deleted.
 namespace {
 
 constexpr const char *kSourceId = "scene_director_source";
-constexpr const char *kSourceIdDeprecated = "clip_director_source";
-constexpr const char *kClockAuto = "";
-constexpr const char *kClockFree = "\x01free";
 
 // The dock is the main driver; its timer only steps in when the source's own tick has been quiet
 // for this long. Half a frame at 120 fps is enough to tell the two apart.
 constexpr uint64_t kDriveQuietNs = 25ull * 1000000ull;
 constexpr uint64_t kOutputRetryNs = 1000ull * 1000000ull;
+
+// One guard for the whole process: with several Scene Director sources on the one Music Director
+// clock, the first source to claim a section_seq is the one that sends its Next.
+cd::SeqGuard g_seq_guard;
 
 struct SdSource {
 	obs_source_t *self = nullptr;
@@ -55,10 +60,10 @@ struct SdSource {
 	cd::SourceConfig cfg;
 	std::unique_ptr<cd::SwitchScheduler> sched;
 	std::unique_ptr<director_midi::Output> out;
+	director_follow::Follower follower;
 
 	double beats = 0.0, bpm = 128.0;
-	bool clock_ok = false, clock_was_ok = false;
-	double free_beats = 0.0;
+	bool clock_ok = false, clock_state_known = false;
 	cd::Section section = cd::Section::Groove;
 
 	std::string out_want;    // the device the settings last asked for
@@ -151,48 +156,32 @@ void send_event(SdSource *c, const cd::SwitchEvent &e)
 /* ------------------------------------------------------------------------- */
 /* clock                                                                      */
 
-/* mx held */
+/* mx held: read Music Director's clock into a ClockSample. Leaves `valid` false when Music
+ * Director is not loaded (no free-running fallback: the scheduler idles). */
 void read_clock(SdSource *c, double seconds, cd::ClockSample &out)
 {
-	pd_clock k = {};
-	bool ok = false;
-	const std::string &sel = c->cfg.clock;
-	if (sel != kClockFree) {
-		if (sel.empty()) {
-			ok = pd_clock_read(0, obs_source_get_name(c->self), nullptr, &k);
-			if (!ok)
-				ok = pd_clock_read(0, nullptr, nullptr, &k);
-		} else {
-			const size_t bar = sel.find('|');
-			const std::string src = sel.substr(0, bar);
-			const std::string flt = bar == std::string::npos ? "" : sel.substr(bar + 1);
-			ok = pd_clock_read(0, src.c_str(), flt.c_str(), &k);
-		}
-	}
+	director_clock k = {};
+	const bool ok = director_clock_read(&k);
 	if (ok) {
 		c->bpm = k.bpm > 1.0 ? k.bpm : c->cfg.fallback_bpm;
 		c->beats = k.beats_now + c->cfg.sync_offset_ms / 1000.0 * c->bpm / 60.0;
 		c->section = (cd::Section)std::clamp(k.section, 0, 2);
-		c->free_beats = c->beats;
-	} else {
-		c->bpm = std::max(30.0, c->cfg.fallback_bpm);
-		c->free_beats += seconds * c->bpm / 60.0;
-		c->beats = c->free_beats;
-		c->section = cd::Section::Groove;
 	}
-	if (ok != c->clock_was_ok)
-		obs_log(LOG_INFO, "'%s': clock %s", obs_source_get_name(c->self),
-			ok ? "following Palette Director" : "free-running (Palette Director clock not available)");
-	c->clock_was_ok = ok;
-	c->clock_ok = ok;
-	/* half a frame of lookahead: a switch fires on the frame nearest its beat, not the first one
-	 * after */
-	out.beats = c->beats + 0.5 * std::clamp(seconds, 0.0, 0.05) * c->bpm / 60.0;
+	out.beats = c->beats;
 	out.bpm = c->bpm;
 	out.section = c->section;
-	out.phrase_beats = ok ? std::max(1, k.phrase_beats) : 32;
+	out.phrase_beats = ok ? std::max(1, (int)k.phrase_beats) : 32;
 	out.paused = ok && k.paused;
-	out.valid = true;
+	out.section_seq = k.section_seq;
+	out.section_beat = k.section_beat;
+	out.section_forced = k.section_forced;
+	out.epoch = k.epoch;
+	out.beat = k.beat;
+	out.phrase = k.phrase;
+	/* half a frame of lookahead: a switch fires on the frame nearest its beat, not the first one
+	 * after */
+	out.beats = c->beats + (ok ? 0.5 * std::clamp(seconds, 0.0, 0.05) * c->bpm / 60.0 : 0.0);
+	out.valid = ok;
 }
 
 /* mx held */
@@ -201,9 +190,46 @@ void drive_locked(SdSource *c, double seconds)
 	c->drive_ns = os_gettime_ns();
 	cd::ClockSample clk;
 	read_clock(c, seconds, clk);
+
+	/* one clear line when Music Director appears or goes away */
+	if (!c->clock_state_known || c->clock_ok != clk.valid) {
+		c->clock_state_known = true;
+		c->clock_ok = clk.valid;
+		obs_log(LOG_INFO, "[scene-director] %s",
+			clk.valid ? "following Music Director" : "Music Director not found: Synesthesia holds");
+	}
+	if (!clk.valid)
+		return; /* idle: no automatic switches (manual Next / Prev still work) */
+
+	director_follow::Sample s;
+	s.ok = clk.valid;
+	s.beat = clk.beat;
+	s.phrase = clk.phrase;
+	s.section = (int)clk.section;
+	s.section_seq = clk.section_seq;
+	s.section_beat = clk.section_beat;
+	s.section_forced = clk.section_forced;
+	s.epoch = clk.epoch;
+	const director_follow::Edges e = c->follower.update(s);
+
 	ensure_output(c);
-	for (const cd::SwitchEvent &e : c->sched->tick(clk))
-		send_event(c, e);
+	if (e.resync) {
+		/* first sample, Music Director found again, or an epoch change: re-anchor, no edge */
+		c->sched->resync(clk);
+		return;
+	}
+	for (const cd::SwitchEvent &ev : c->sched->tick(clk)) {
+		/* one section edge, one Next across every Scene Director source */
+		if (ev.section_edge && !g_seq_guard.claim(ev.section_seq)) {
+			obs_log(LOG_DEBUG, "'%s': section seq %lld already sent by another source; skip",
+				obs_source_get_name(c->self), (long long)ev.section_seq);
+			continue;
+		}
+		if (ev.section_edge)
+			obs_log(LOG_INFO, "[scene-director] MIDI Next seq=%lld beat=%lld", (long long)ev.section_seq,
+				(long long)ev.section_beat);
+		send_event(c, ev);
+	}
 }
 
 /* mx held: a manual switch, from the dock or a hotkey */
@@ -223,7 +249,9 @@ void manual_locked(SdSource *c, bool prev)
 
 void sd_defaults(obs_data_t *s)
 {
-	obs_data_set_default_string(s, "clock_source", kClockAuto);
+	/* clock_source is kept in saved data (never read or deleted); Scene Director follows Music
+	 * Director unconditionally now. */
+	obs_data_set_default_string(s, "clock_source", "");
 	obs_data_set_default_int(s, "sync_offset_ms", 0);
 	obs_data_set_default_double(s, "fallback_bpm", 128.0);
 
@@ -328,34 +356,6 @@ void sd_tick(void *data, float seconds)
 	drive_locked(c, std::clamp((double)seconds, 0.0, 0.25));
 }
 
-void add_clock_list(obs_property_t *p)
-{
-	obs_property_list_add_string(p, obs_module_text("Clock.Auto"), kClockAuto);
-	proc_handler_t *ph = obs_get_proc_handler();
-	calldata_t cd;
-	calldata_init(&cd);
-	if (ph && proc_handler_call(ph, PD_CLOCK_PROC_INSTANCES, &cd)) {
-		obs_data_t *root = obs_data_create_from_json(
-			(std::string("{\"a\":") + (calldata_string(&cd, "json") ? calldata_string(&cd, "json") : "[]") +
-			 "}")
-				.c_str());
-		obs_data_array_t *arr = root ? obs_data_get_array(root, "a") : nullptr;
-		for (size_t i = 0; arr && i < obs_data_array_count(arr); ++i) {
-			obs_data_t *it = obs_data_array_item(arr, i);
-			const std::string src = obs_data_get_string(it, "source");
-			const std::string flt = obs_data_get_string(it, "filter");
-			const std::string label = src + " / " + flt;
-			const std::string value = src + "|" + flt;
-			obs_property_list_add_string(p, label.c_str(), value.c_str());
-			obs_data_release(it);
-		}
-		obs_data_array_release(arr);
-		obs_data_release(root);
-	}
-	calldata_free(&cd);
-	obs_property_list_add_string(p, obs_module_text("Clock.Free"), kClockFree);
-}
-
 void add_type_list(obs_properties_t *pr, const char *key, const char *label)
 {
 	obs_property_t *p = obs_properties_add_list(pr, key, label, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
@@ -379,8 +379,8 @@ obs_properties_t *sd_properties(void *)
 	obs_properties_t *pr = obs_properties_create();
 
 	obs_properties_t *ck = obs_properties_create();
-	add_clock_list(obs_properties_add_list(ck, "clock_source", obs_module_text("ClockSource"), OBS_COMBO_TYPE_LIST,
-					       OBS_COMBO_FORMAT_STRING));
+	/* clock_source is no longer shown (Scene Director always follows Music Director); the key
+	 * stays in the saved settings, it is just not read or deleted. */
 	obs_properties_add_int_slider(ck, "sync_offset_ms", obs_module_text("SyncOffset"), -200, 200, 1);
 	obs_properties_add_float(ck, "fallback_bpm", obs_module_text("FallbackBpm"), 60.0, 200.0, 0.5);
 	obs_properties_add_group(pr, "g_clock", obs_module_text("Group.Clock"), OBS_GROUP_NORMAL, ck);
@@ -410,12 +410,12 @@ obs_properties_t *sd_properties(void *)
 	return pr;
 }
 
-void register_source(const char *id, uint32_t extra_flags)
+void register_source(const char *id)
 {
 	struct obs_source_info si = {};
 	si.id = id;
 	si.type = OBS_SOURCE_TYPE_INPUT;
-	si.output_flags = OBS_SOURCE_VIDEO | extra_flags;
+	si.output_flags = OBS_SOURCE_VIDEO;
 	si.get_name = sd_name;
 	si.create = sd_create;
 	si.destroy = sd_destroy;
@@ -451,11 +451,7 @@ template<typename F> void write_settings(obs_source_t *src, F &&fn)
 
 extern "C" void scene_director_source_load(void)
 {
-	/* clip_director_source is the id a Clip Director 1.1.0 scene collection holds. It is
-	 * deprecated (hidden from the Add menu) but still registered with the same implementation, so
-	 * those collections keep loading. */
-	register_source(kSourceId, 0);
-	register_source(kSourceIdDeprecated, OBS_SOURCE_DEPRECATED);
+	register_source(kSourceId);
 }
 
 namespace sdapi {
@@ -465,7 +461,7 @@ bool is_scene_director(obs_source_t *src)
 	const char *id = src ? obs_source_get_unversioned_id(src) : nullptr;
 	if (!id)
 		return false;
-	return strcmp(id, kSourceId) == 0 || strcmp(id, kSourceIdDeprecated) == 0;
+	return strcmp(id, kSourceId) == 0;
 }
 
 bool status(obs_source_t *src, Status &o)
@@ -475,7 +471,7 @@ bool status(obs_source_t *src, Status &o)
 		return false;
 	std::lock_guard<std::mutex> g(c->mx);
 	o = Status();
-	o.clock_pd = c->clock_ok;
+	o.clock_following = c->clock_ok;
 	o.bpm = c->bpm;
 	o.beats = c->beats;
 	o.section = (int)c->section;

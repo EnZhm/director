@@ -1,6 +1,6 @@
 /*
 Scene Director dock: the control surface for the set. It picks the Scene Director source, shows the
-Palette Director clock and section, the MIDI out link (port open / not found / none selected), the
+Music Director clock and section, the MIDI out link (port open / not found / none selected), the
 Next / Prev buttons, the automatic-switch triggers, the cooldown and Scene lead, the Next and Prev
 message editors, and the log of every message with its beat, reason and bytes.
 
@@ -339,8 +339,13 @@ private:
 			return;
 		}
 
-		clock_->setText(QString("%1 %2 BPM").arg(st.clock_pd ? "PD" : "free").arg(st.bpm, 0, 'f', 1));
-		clock_->setToolTip(st.clock_pd ? obs_module_text("Clock.Pd") : obs_module_text("Clock.Free"));
+		if (st.clock_following) {
+			clock_->setText(QString("MD %1 BPM").arg(st.bpm, 0, 'f', 1));
+			clock_->setToolTip(obs_module_text("Clock.Pd"));
+		} else {
+			clock_->setText(obs_module_text("Clock.Waiting"));
+			clock_->setToolTip(obs_module_text("Clock.Waiting"));
+		}
 		const int sec = std::clamp(st.section, 0, 2);
 		section_->setText(kSectionNames[sec]);
 		section_->setStyleSheet(QString("background:%1; color:white; font-weight:bold; padding:2px 6px; "

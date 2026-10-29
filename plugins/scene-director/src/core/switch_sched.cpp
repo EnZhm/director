@@ -13,12 +13,6 @@ const char *sec_name(Section s)
 	return s == Section::Breakdown ? "breakdown" : (s == Section::Drop ? "drop" : "groove");
 }
 
-// Next bar line (multiple of 4 beats) at or after `beat`.
-double next_bar_at_least(double beat)
-{
-	return std::ceil(beat / 4.0 - 1e-9) * 4.0;
-}
-
 // First phrase downbeat at or after `beat`.
 double next_phrase_after(double beat, int phrase_beats)
 {
@@ -63,30 +57,46 @@ double SwitchScheduler::lead_beats(double bpm) const
 	return lead * std::max(1.0, bpm) / 60.0;
 }
 
-bool SwitchScheduler::within_cooldown(double at_beat) const
+bool SwitchScheduler::in_cooldown_window(double at_beat) const
 {
 	if (!switched_ || cfg_.cooldown_beats <= 0)
 		return false;
 	return at_beat - last_switch_beat_ < static_cast<double>(cfg_.cooldown_beats) - 1e-9;
 }
 
-void SwitchScheduler::schedule(SwitchEvent::Reason reason, double at_beat, double bpm, const char *why)
+bool SwitchScheduler::within_cooldown(double at_beat, bool forced) const
 {
-	if (within_cooldown(at_beat)) {
-		char buf[160];
+	if (forced)
+		return false; /* a forced section (Force breakdown / Drop now) bypasses the cooldown */
+	return in_cooldown_window(at_beat);
+}
+
+void SwitchScheduler::schedule(SwitchEvent::Reason reason, double at_beat, double bpm, const char *why,
+			       bool section_edge, int64_t section_seq, int64_t section_beat, bool forced)
+{
+	if (within_cooldown(at_beat, forced)) {
+		char buf[192];
 		std::snprintf(buf, sizeof(buf), "%9.3f suppress %-15s at %.3f (cooldown %.0f beats, last %.3f) | %s",
 			      last_beats_, SwitchEvent{reason, at_beat, at_beat}.reason_name(), at_beat,
 			      static_cast<double>(cfg_.cooldown_beats), last_switch_beat_, why);
 		note(buf);
 		return;
 	}
+	if (forced && in_cooldown_window(at_beat)) {
+		char buf[192];
+		std::snprintf(buf, sizeof(buf),
+			      "%9.3f bypass   %-15s at %.3f (forced: cooldown %.0f beats skipped) | %s", last_beats_,
+			      SwitchEvent{reason, at_beat, at_beat}.reason_name(), at_beat,
+			      static_cast<double>(cfg_.cooldown_beats), why);
+		note(buf);
+	}
 	const double send_at = at_beat - lead_beats(bpm);
 	for (const Pending &p : pending_) {
 		if (p.reason == reason && std::fabs(p.at_beat - at_beat) < 1e-6)
 			return; /* already planned */
 	}
-	pending_.push_back(Pending{reason, at_beat, send_at});
-	char buf[160];
+	pending_.push_back(Pending{reason, at_beat, send_at, section_edge, section_seq, section_beat});
+	char buf[192];
 	std::snprintf(buf, sizeof(buf), "%9.3f plan     %-15s at %.3f (send %.3f) | %s", last_beats_,
 		      SwitchEvent{reason, at_beat, send_at}.reason_name(), at_beat, send_at, why);
 	note(buf);
@@ -98,16 +108,37 @@ SwitchEvent SwitchScheduler::emit_event(const Pending &p)
 	e.reason = p.reason;
 	e.at_beat = p.at_beat;
 	e.send_at_beat = p.send_at_beat;
+	e.section_edge = p.section_edge;
+	e.section_seq = p.section_seq;
+	e.section_beat = p.section_beat;
 	last_switch_beat_ = p.at_beat;
 	switched_ = true;
 	return e;
+}
+
+void SwitchScheduler::resync(const ClockSample &clk)
+{
+	started_ = true;
+	section_ = clk.section;
+	section_seq_ = clk.section_seq;
+	last_beats_ = clk.beats;
+	pending_.clear();
+	/* the beat grid was re-anchored: the old switch beat is meaningless in the new grid, so the
+	 * cooldown anchor is dropped (otherwise a reset that lands behind it would suppress every
+	 * automatic switch until the clock caught up) */
+	switched_ = false;
+	last_switch_beat_ = clk.beats;
+	char buf[112];
+	std::snprintf(buf, sizeof(buf), "%9.3f resync   section %s seq %lld, beat %.3f", clk.beats, sec_name(section_),
+		      static_cast<long long>(section_seq_), clk.beats);
+	note(buf);
 }
 
 std::vector<SwitchEvent> SwitchScheduler::tick(const ClockSample &clk)
 {
 	std::vector<SwitchEvent> out;
 	if (!clk.valid)
-		return out;
+		return out; /* Music Director missing: the scheduler idles */
 
 	const double b = clk.beats;
 	const double bpm = clk.bpm > 1.0 ? clk.bpm : 128.0;
@@ -115,14 +146,16 @@ std::vector<SwitchEvent> SwitchScheduler::tick(const ClockSample &clk)
 	if (!started_) {
 		started_ = true;
 		section_ = clk.section;
+		section_seq_ = clk.section_seq;
 		last_beats_ = b;
-		char buf[96];
-		std::snprintf(buf, sizeof(buf), "%9.3f start    section %s, beat %.3f", b, sec_name(section_), b);
+		char buf[112];
+		std::snprintf(buf, sizeof(buf), "%9.3f start    section %s seq %lld, beat %.3f", b, sec_name(section_),
+			      static_cast<long long>(section_seq_), b);
 		note(buf);
 		return out;
 	}
 
-	/* a clock jump (Palette Director reset, big correction): re-plan from here */
+	/* a clock jump (Music Director reset, big correction): re-plan from here */
 	if (b < last_beats_ - 1.0 || b > last_beats_ + 8.0) {
 		pending_.clear();
 		char buf[112];
@@ -131,23 +164,30 @@ std::vector<SwitchEvent> SwitchScheduler::tick(const ClockSample &clk)
 	}
 	last_beats_ = b;
 
-	/* section changes: plan the automatic switch */
-	if (clk.section != section_) {
+	/* section changes: act on a change of section_seq, exactly once per sequence */
+	if (clk.section_seq != section_seq_) {
 		section_ = clk.section;
+		section_seq_ = clk.section_seq;
+		const int64_t seq = clk.section_seq;
+		const int64_t sb = clk.section_beat;
+		const bool forced = clk.section_forced;
 		if (section_ == Section::Breakdown && cfg_.trigger_breakdown)
-			schedule(SwitchEvent::Reason::Breakdown, next_bar_at_least(b), bpm, "breakdown start");
+			/* landing beat: the beat the section started on, as the palette and clip do */
+			schedule(SwitchEvent::Reason::Breakdown, static_cast<double>(sb), bpm, "breakdown start", true,
+				 seq, sb, forced);
 		else if (section_ == Section::Drop && cfg_.trigger_drop)
-			schedule(SwitchEvent::Reason::Drop, std::floor(b + 1e-9), bpm, "drop downbeat");
+			schedule(SwitchEvent::Reason::Drop, static_cast<double>(sb), bpm, "drop downbeat", true, seq,
+				 sb, forced);
 		else if (section_ == Section::Groove && cfg_.trigger_groove_phrase)
 			schedule(SwitchEvent::Reason::GroovePhrase, next_phrase_after(b, clk.phrase_beats), bpm,
-				 "groove phrase");
+				 "groove phrase", false, 0, 0, false);
 	} else if (section_ == Section::Groove && cfg_.trigger_groove_phrase) {
 		bool planned = false;
 		for (const Pending &p : pending_)
 			planned |= p.reason == SwitchEvent::Reason::GroovePhrase;
 		if (!planned)
 			schedule(SwitchEvent::Reason::GroovePhrase, next_phrase_after(b, clk.phrase_beats), bpm,
-				 "groove phrase");
+				 "groove phrase", false, 0, 0, false);
 	}
 
 	/* fire the events that are due */
@@ -159,7 +199,7 @@ std::vector<SwitchEvent> SwitchScheduler::tick(const ClockSample &clk)
 			if (p.reason == SwitchEvent::Reason::GroovePhrase && section_ == Section::Groove &&
 			    cfg_.trigger_groove_phrase)
 				schedule(SwitchEvent::Reason::GroovePhrase, p.at_beat + std::max(1, clk.phrase_beats),
-					 bpm, "groove phrase");
+					 bpm, "groove phrase", false, 0, 0, false);
 		} else {
 			++i;
 		}
@@ -175,13 +215,14 @@ SwitchEvent SwitchScheduler::manual(SwitchEvent::Reason reason, const ClockSampl
 	e.send_at_beat = clk.beats;
 	last_switch_beat_ = clk.beats;
 	switched_ = true;
-	/* restart the cooldown: anything automatic that now falls inside it is dropped */
+	/* restart the cooldown: anything automatic that now falls inside it is dropped. A manual
+	 * switch itself always fires: it bypasses the cooldown by construction. */
 	const double until = clk.beats + std::max(0, cfg_.cooldown_beats);
 	pending_.erase(std::remove_if(pending_.begin(), pending_.end(),
 				      [until](const Pending &p) { return p.at_beat < until - 1e-9; }),
 		       pending_.end());
 	char buf[160];
-	std::snprintf(buf, sizeof(buf), "%9.3f manual   %-15s (cooldown restarted, %.0f beats)", clk.beats,
+	std::snprintf(buf, sizeof(buf), "%9.3f manual   %-15s (bypass cooldown, restart %.0f beats)", clk.beats,
 		      e.reason_name(), static_cast<double>(std::max(0, cfg_.cooldown_beats)));
 	note(buf);
 	return e;
