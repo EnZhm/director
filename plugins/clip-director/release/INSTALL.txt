@@ -1,14 +1,14 @@
-Clip Director 1.1.0 for OBS Studio 32.2.x (Windows x64)
+Clip Director 2.0.0 for OBS Studio 32.2.x (Windows x64)
 =======================================================
 
-New in 1.1.0: Synesthesia scene control over OSC (section 5) and the MIDI
-Director dock (section 6). Scenes launch on the same beat as the clip
-transition they pair with: at the start of the breakdown crossfade, and on
-the drop downbeat. This release is part of Director 1.0.0 and ships as
-Windows x64 only.
+New in 2.0.0: Clip Director is clips only. It follows Music Director's clock
+(director_clock) and holds when Music Director is not loaded. Synesthesia OSC
+scene control and the MIDI Director dock are gone: Synesthesia is driven by
+Scene Director, and MIDI by Music Director. A third armed deck lets a
+breakdown and a drop cut on the section beat.
 
 Clip Director is an OBS source that plays folders of video clips in time with
-the music. It follows Palette Director's beat clock and cuts on the beat,
+the music. It follows Music Director's beat clock and cuts on the beat,
 shuffles deeply (no clip repeats until the whole pool has played), evens out
 brightness so the set feels consistent, and inverts bright clips so most of
 the picture is black. Its output goes out over Spout to Synesthesia, where
@@ -16,26 +16,26 @@ black reads as transparent.
 
 It adds:
   - a source "Clip Director"
-  - a dock "Clip Director": what is playing and what is next, the beat, and
-    Skip / Hold / Ban, plus the folder list, the Synesthesia tab and the
-    event log.
-  - a dock "MIDI Director": map MIDI notes and CCs to OBS hotkeys.
+  - a dock "Clip Director": what is playing and the three armed decks, the
+    beat, Skip / Hold / Ban, the folder list and the event log.
 
-Needs Palette Director 1.1 or later for the beat clock. With an older
-Palette Director (or none) Clip Director still plays, free-running at a
-fixed BPM, and the Synesthesia tab runs from the free-running clock.
+Needs Music Director 2.0.0 for the beat clock. Without it Clip Director holds
+the current clip: no cut is scheduled, and the dock says "Waiting for Music
+Director".
 
 
 1. Install
 ----------
 1. Close OBS.
-2. Either install the suite (Palette Director and Clip Director in one
-   step: director-1.0.0-windows-x64.zip from
-   https://github.com/EnZhm/director/releases) or install Palette Director
-   1.2.0 on its own first, then this plugin. With either route the folder
-   C:\ProgramData\obs-studio\plugins\palette-director must be there and
-   hold 1.1.0 or newer.
-3. Unzip clip-director-1.1.0-windows-x64.zip and copy the folder
+2. Either install the suite (the four plugins in one step:
+   director-2.0.0-windows-x64.zip from
+   https://github.com/EnZhm/director/releases) or install Music Director 2.0.0
+   on its own first, then this plugin. With either route the folder
+   C:\ProgramData\obs-studio\plugins\music-director must be there and hold
+   2.0.0.
+   Upgrading from 1.x: remove the old "palette-director", "clip-director" and
+   "scene-director" folders first.
+3. Unzip clip-director-2.0.0-windows-x64.zip and copy the folder
    "clip-director" into
      C:\ProgramData\obs-studio\plugins\
    so that these files exist:
@@ -43,8 +43,8 @@ fixed BPM, and the Synesthesia tab runs from the free-running clock.
      C:\ProgramData\obs-studio\plugins\clip-director\data\effects\cd-composite.effect
      C:\ProgramData\obs-studio\plugins\clip-director\data\locale\en-US.ini
 4. Start OBS. Help > Log Files > View Current Log should show
-     [clip-director] plugin loaded successfully (version 1.1.0)
-     [palette-director] plugin loaded successfully (version 1.2.0)
+     [clip-director] plugin loaded successfully (version 2.0.0)
+     [music-director] plugin loaded successfully (version 2.0.0)
 
 
 2. Prepare the clip folders (once per folder, recommended)
@@ -71,10 +71,10 @@ cuts cleanly and measures every clip's brightness:
 -----------------
 1. In a scene, Sources > "+" > Clip Director.
 2. Under "Clip folders" add one or more folders.
-3. Clock: "Follow Palette Director" is Auto by default: the Palette Lock on
-   this source, else the first Palette Lock found. Put a Palette Lock on the
-   Clip Director source (or pick the one on your Synesthesia input) so the
-   clips and the palettes change on the same grid.
+3. Clock: there is no clock picker any more. Clip Director follows Music
+   Director automatically. The retired "clock_source" setting is still in old
+   collections but is ignored. Put the Palette Lock on the Clip Director
+   source so the clips and the palettes change on the same grid.
 4. Output: "Opaque (black background)" is the default and the right one for
    Synesthesia, which treats transparency as black.
 5. Send it to Synesthesia: right-click the source > Filters > "+" > Spout
@@ -85,18 +85,18 @@ cuts cleanly and measures every clip's brightness:
 
 4. The Clip Director dock
 -------------------------
-Docks menu > "Clip Director". Two tabs: "Clips" (the top strip, now
-playing / next, Skip / Hold / Ban, the clip folders and the log) and
-"Synesthesia" (section 5). The top strip and the footer are on the Clips
-tab.
-- Top: the source, the clock (PD = following Palette Director, free = not),
-  the section (GROOVE / BREAKDOWN / DROP) and four beat lights, and when the
-  next cut comes.
+Docks menu > "Clip Director". One page: the top strip, now playing, the three
+armed decks, Skip / Hold / Ban, the clip folders and the log.
+- Top: the source, the clock (MD = following Music Director, otherwise
+  "Waiting for Music Director"), the section (GROOVE / BREAKDOWN / DROP) and
+  four beat lights, and when the next cut comes.
 - Now playing: thumbnail, clip, folder, start point, speed, inverted or not.
   - Invert: auto / always / never, saved for that clip.
   - Ban clip: never play it again (saved), and cut away on the next beat.
-- Next: the clip prepared for the next cut (during a breakdown, the drop
-  clip waiting for the drop).
+- Next / Breakdown / Drop: the three armed decks, each loaded, seeked and
+  paused ahead of time. Next is the next clip of this section, Breakdown an
+  armed Breakdown-pool clip (while the section is not a breakdown) and Drop an
+  armed Drop-pool clip (while the section is not a drop).
 - Skip: cut to the next clip on the next beat.
 - Hold: stay on the clip on screen. No cuts and no stutter until released.
 - Folders: turn a folder on or off, set its section and its weight.
@@ -106,103 +106,37 @@ tab.
   - A folder whose name contains "breakdown", "drop" or "groove" starts
     with that tag.
   - Weight 0-10: how often the folder is picked relative to the others.
-- Synesthesia: OSC scene control, see section 5.
-- Log: every cut, drop, stutter, skip, hold and ban, and every OSC scene
-  message with its beat position and reason.
+- Log: every cut, drop, breakdown, stutter, skip, hold and ban.
 - Footer: clip count, how many have stats and how many are banned, cuts so
   far and the average cut timing error.
 All of this is saved with the scene collection.
 
 
-5. Synesthesia scenes over OSC
-------------------------------
-Synesthesia must have a Pro licence and OSC enabled. In Synesthesia, open
-Settings > OSC and note the port numbers; the host, the send port and the
-feedback port in the Clip Director dock > Synesthesia tab must match them
-(localhost is fine when OBS and Synesthesia are on the same machine).
-Defaults: host 127.0.0.1, send port 7000, feedback port 7001.
-
-- Auto ON / OFF and the link chip: Auto is OFF by default. The chip reads
-  "OSC off" (control disabled), "OSC sending" (amber: messages going out
-  but nothing coming back), "OSC linked" (green: Synesthesia echoed a
-  launch in the last 10 s) or "OSC error" (the socket did not open). Amber
-  usually means the feedback port does not match.
-- Now / next scene, Next scene, Hold scene, Fire bang 1: manual control.
-  Hold suspends automatic launches, exactly as Hold does for clips.
-- When to switch: breakdown start launches from the Breakdown pool, the drop
-  downbeat launches from the Drop pool (optionally with scene bang 1), and
-  during a groove a scene can launch every 2 or every 4 phrases, on the
-  phrase downbeat.
-- Scene lead (0-500 ms): sends the launch early to hide Synesthesia's own
-  scene-load time. It applies to groove launches and to "Drop now";
-  breakdowns and drops are detected, not predicted, so those go on the beat
-  itself.
-- Scene pools: Groove, Breakdown and Drop. Each entry is a scene name plus an
-  optional preset; add, remove and reorder them, and double-click to launch
-  one by hand. Each pool uses a shuffle bag, the same rule as the clip pools:
-  no repeat until the pool has played through.
-- Import from Synesthesia: fills the scene names from Synesthesia's OSC
-  output, so you do not have to type them.
-- Log: every OSC message, with the beat position and the reason.
-
-What goes on the wire:
-  out  /scenes/{name} "{preset}"   scene name lowercase, no spaces or _ or -;
-                                   the preset is optional, and without one
-                                   Synesthesia uses its gold slot
-  out  /presets "...", /controls/global/{type}/{n}, /controls/meta/{name},
-       /playlist/next
-  in   /scenes/{name}              Synesthesia echoes every launch; this is
-                                   what the link chip watches
-
-Timing: scene launches are emitted on the SAME beat as the clip transition
-they pair with, so a drop lands as one hit: clip cut, Palette Director's drop
-colour cycle and the Synesthesia scene together. Groove launches wait until a
-drop cycle ends.
-
-The settings live with the Clip Director source in the scene collection.
-
-The Log lists every message with its beat position and reason, one per
-line:
-    123.45  -> /scenes/tunnel "acid"  [drop downbeat]
-    123.45  <- /scenes/tunnel
-"->" is a message going out, "<-" an echo from Synesthesia; an early
-launch carries "(+N ms early)", a refused message "[NOT SENT]".
+5. Synesthesia and MIDI
+-----------------------
+Handler moved out of Clip Director:
+- Synesthesia scenes are driven by Scene Director (playlist Next / Prev over
+  MIDI out), on the same section beat as the clip cut.
+- MIDI is the Music Director MIDI Director dock: it maps MIDI notes and CCs
+  to any OBS hotkey, including Clip Director's Skip / Hold / Ban.
+Clip Director still sends its picture to Synesthesia over Spout; no OSC is
+used any more.
 
 
-6. MIDI Director
-----------------
-Docks menu > "MIDI Director". It maps a MIDI note or control change from a
-controller to an OBS hotkey in the suite.
-- Device: pick the MIDI input, with a Rescan button and a light that
-  flashes on incoming messages.
-- Learn: pick the hotkey in the searchable list, choose the mode (press /
-  release or toggle), press Learn (the button becomes Cancel: it arms and
-  waits), then move a control. The first press binds it; there is no
-  popup.
-- Mapping table: control, target and mode, with a Remove button per row;
-  saved with the scene collection.
-- Hotkey list: every hotkey OBS knows about (frontend, source and so on),
-  searchable by name or description. It includes the suite's own: Palette
-  Director (Force off / on, Pause, Rotate colours, PANIC, next / previous
-  palette, palette 1-8 go live) and the Music clock commands (Phrase is
-  now, Drop now, Force breakdown, Tap tempo, Lock BPM, Nudge back /
-  forward); Clip Director (Skip, Hold, Ban); Synesthesia (next scene, hold
-  scene, fire bang 1).
-- Monitor: the last MIDI message received, with a count and a short
-  history.
-Windows MIDI needs no extra driver or library. Mappings are saved with the
-scene collection.
-
-
-7. How it cuts
+6. How it cuts
 --------------
+- The clock is Music Director's. A section change is acted on exactly once,
+  when its section_seq changes, and a breakdown or a drop cuts on the section
+  beat (a breakdown crossfade starts on that beat), so the palette change, the
+  clip cut and Scene Director's Synesthesia Next land together.
 - Groove: hold 4 bars, cut on the downbeat (25% of cuts are a 1-beat
-  crossfade).
+  crossfade). A return to groove keeps the bar-line rule.
 - Breakdown: hold 8 bars, 4-beat crossfades.
-- Drop: a drop clip is loaded during the breakdown and cuts in on the drop
-  downbeat, together with the Synesthesia scene for the drop. When Palette
-  Director runs its drop colour cycle, the picture stutters between the drop
-  clip and the outgoing clip at the same rate.
+- Drop: an armed drop clip cuts in on the drop downbeat. When Palette Director
+  runs its drop colour cycle, the picture stutters between the drop clip and
+  the outgoing clip at the same rate.
+- If an armed deck has not had its preroll yet, Clip Director falls back to
+  the next bar line.
 - All of this is in the source properties under "Cuts and transitions".
 - Sync offset (Clock group): moves every cut earlier or later by up to
   200 ms, to line up with your audio monitoring delay.
@@ -212,14 +146,15 @@ scene collection.
   threshold) are inverted. The Advanced controls are rarely needed.
 
 
-8. Troubleshooting
+7. Troubleshooting
 ------------------
-- Clock shows "free": no Palette Lock found, or Palette Director is older
-  than 1.1. Check the log for "clock following Palette Director".
-- Scene control does nothing: OSC needs Synesthesia Pro, and the ports in the
-  Synesthesia tab must match Synesthesia Settings > OSC. If the link chip
-  stays amber, nothing is coming back on the feedback port.
-- Scenes arrive late: raise Scene lead so the launch is sent earlier.
+- The dock says "Waiting for Music Director": Music Director is not loaded or
+  is older than 2.0.0. Check the log for "Music Director not found: clips
+  hold". The current clip keeps playing; cuts resume once the clock is back
+  ("following Music Director").
+- Cuts are late on a breakdown or a drop: the armed deck may not have had its
+  preroll; the log says "armed deck not ready, next bar line". Give it more
+  time before the section, or lower "Preroll (beats)".
 - Synesthesia does not list the sender: if OBS was force-closed, the old
   sender name can stay registered and the new one gets "_1" appended. Close
   OBS normally, or rename the sender in the Spout Filter.
@@ -229,7 +164,7 @@ scene collection.
   not during it (it can drop a frame or two).
 
 
-9. Uninstall
+8. Uninstall
 ------------
 Close OBS and delete C:\ProgramData\obs-studio\plugins\clip-director.
 The "_cd" folders made by the ingest tool can be deleted at any time.

@@ -1,14 +1,14 @@
 /*
-Clip Director source (P4): beat-synced, shuffled clip playback following Palette Director's clock.
+Clip Director source (P4): beat-synced, shuffled clip playback following Music Director's clock.
 
 Threads: video_tick + video_render run on the graphics thread; update/buttons on the UI thread.
 One mutex guards the state; the graphics thread holds it only for in-memory work.
 
-Decks: four private ffmpeg_source children. A deck is "prepared" by loading a file (which
-restarts its media), seeking to the start point and pausing; a cut un-pauses it. Roles:
-  live    on screen
-  spare   the outgoing clip, kept playing for crossfades and stutter
-  slot    kNext / kDrop decks waiting for their cut (core/scheduler.h)
+Decks: private ffmpeg_source children. A deck is "prepared" by loading a file (which restarts its
+media), seeking to the start point and pausing; a cut un-pauses it. Roles:
+  live       on screen
+  spare      the outgoing clip, kept playing for crossfades and stutter
+  slot       the kNext / kBreakdown / kDrop decks waiting for their cut (core/scheduler.h)
 */
 
 #include <obs-module.h>
@@ -31,22 +31,20 @@ restarts its media), seeking to the start point and pausing; a cut un-pauses it.
 #include <string>
 #include <vector>
 
-#include "pd-clock-api.h"
+#include "director-clock.h"
+#include "director-follow.h"
 #include "obs/cd-api.h"
 #include "obs/cd-library.h"
 #include "levels.h"
-#include "osc.h"
-#include "osc-transport.h"
 #include "picker.h"
-#include "scene_pool.h"
 #include "scheduler.h"
 
 namespace {
 
 constexpr uint32_t kW = 1920, kH = 1080;
-constexpr int kDecks = 4;
-constexpr const char *kClockAuto = "";
-constexpr const char *kClockFree = "\x01free";
+/* live + spare + three armed slots (kNext / kBreakdown / kDrop) */
+constexpr int kDecks = 5;
+constexpr const char *kPdDropCycleProc = "palette_director_drop_cycle";
 
 struct Deck {
 	obs_source_t *src = nullptr;
@@ -70,26 +68,12 @@ struct Cfg {
 	std::vector<cd::Folder> folders;               /* with tag / weight / enabled from the settings */
 	std::string folders_key;                       /* folder paths only: a change reloads the library */
 	std::map<std::string, ClipOverride> overrides; /* clip path -> ban / polarity */
-	std::string clock;                             // "" auto, kClockFree, or "source|filter"
 	double sync_ms = 0.0, fallback_bpm = 128.0;
 	cd::PickerConfig pk;
 	cd::SchedulerConfig sc;
 	cd::LevelConfig lc;
 	int alpha_mode = 1;
 	double alpha_lo = 0.02, alpha_hi = 0.20;
-
-	/* Synesthesia over OSC (W2/W3): syn_* keys, like folder_meta */
-	bool syn_enabled = false;
-	std::string syn_host = "127.0.0.1";
-	int syn_send_port = 7000;
-	int syn_feedback_port = 7001;
-	std::string syn_pools_json;
-	cd::ScenePools syn_pools;
-	bool syn_on_breakdown = true;
-	bool syn_on_drop = true;
-	bool syn_bang_on_drop = false;
-	int syn_groove_phrases = 0;
-	double syn_lead_ms = 0.0;
 };
 
 struct CdSource {
@@ -100,7 +84,7 @@ struct CdSource {
 	std::unique_ptr<cd::ClipPicker> picker;
 	std::unique_ptr<cd::CutScheduler> sched;
 	Deck decks[kDecks];
-	int slot_deck[2] = {-1, -1};
+	int slot_deck[cd::CutScheduler::kSlots] = {-1, -1, -1};
 	int live = -1, spare = -1;
 
 	bool tr_active = false;
@@ -110,8 +94,8 @@ struct CdSource {
 	bool stutter_on = false;
 
 	double beats = 0.0, bpm = 128.0;
-	bool clock_ok = false, clock_was_ok = false;
-	double free_beats = 0.0;
+	bool clock_ok = false;
+	director_follow::Follower follower; /* found / lost, per the shared contract */
 	cd::Section section = cd::Section::Groove;
 
 	gs_effect_t *effect = nullptr;
@@ -155,16 +139,6 @@ struct CdSource {
 	uint64_t cuts = 0;
 	double stat_t = 0.0;
 
-	/* Synesthesia over OSC (W2/W3) */
-	std::unique_ptr<cdnet::OscTransport> syn;
-	cd::SceneShuffle syn_shuf[3]; /* one shuffle bag per pool (Groove / Breakdown / Drop) */
-	bool syn_hold = false;        /* Hold scene: suspends the automatic launches */
-	std::string syn_now, syn_now_preset;
-	uint64_t syn_send_ns = 0, syn_echo_ns = 0;
-	std::vector<std::string> syn_heard; /* scene names Synesthesia echoed, newest first */
-	std::deque<std::string> syn_log;    /* every OSC message with beat position and reason */
-	uint64_t syn_log_seq = 0;
-
 	/* dock event log */
 	std::deque<std::string> log;
 	uint64_t log_seq = 0;
@@ -175,6 +149,11 @@ struct CdSource {
 const char *sec_name(cd::Section s)
 {
 	return s == cd::Section::Breakdown ? "breakdown" : (s == cd::Section::Drop ? "drop" : "groove");
+}
+
+const char *sec_name_up(cd::Section s)
+{
+	return s == cd::Section::Breakdown ? "BREAKDOWN" : (s == cd::Section::Drop ? "DROP" : "GROOVE");
 }
 
 const char *tr_name(cd::Transition t)
@@ -256,7 +235,6 @@ Cfg read_cfg(obs_data_t *s)
 	}
 	obs_data_array_release(ov);
 
-	c.clock = obs_data_get_string(s, "clock_source");
 	c.sync_ms = (double)obs_data_get_int(s, "sync_offset_ms");
 	c.fallback_bpm = obs_data_get_double(s, "fallback_bpm");
 
@@ -291,29 +269,14 @@ Cfg read_cfg(obs_data_t *s)
 	c.alpha_mode = (int)obs_data_get_int(s, "output_mode");
 	c.alpha_lo = obs_data_get_double(s, "alpha_lo");
 	c.alpha_hi = std::max(c.alpha_lo + 0.01, obs_data_get_double(s, "alpha_hi"));
-
-	c.syn_enabled = obs_data_get_bool(s, "syn_enabled");
-	const std::string host = obs_data_get_string(s, "syn_host");
-	if (!host.empty())
-		c.syn_host = host;
-	c.syn_send_port = std::clamp((int)obs_data_get_int(s, "syn_send_port"), 1, 65535);
-	c.syn_feedback_port = std::clamp((int)obs_data_get_int(s, "syn_feedback_port"), 1, 65535);
-	c.syn_pools_json = obs_data_get_string(s, "syn_pools");
-	if (!c.syn_pools_json.empty() && !cd::scene_pools_from_json(c.syn_pools_json, c.syn_pools)) {
-		obs_log(LOG_WARNING, "syn_pools is not readable JSON; the scene pools stay empty");
-		c.syn_pools = cd::ScenePools();
-	}
-	c.syn_on_breakdown = obs_data_get_bool(s, "syn_on_breakdown");
-	c.syn_on_drop = obs_data_get_bool(s, "syn_on_drop");
-	c.syn_bang_on_drop = obs_data_get_bool(s, "syn_bang_on_drop");
-	c.syn_groove_phrases = std::clamp((int)obs_data_get_int(s, "syn_groove_phrases"), 0, 4);
-	c.syn_lead_ms = std::clamp(obs_data_get_double(s, "syn_lead_ms"), 0.0, 500.0);
 	return c;
 }
 
 void cd_defaults(obs_data_t *s)
 {
-	obs_data_set_default_string(s, "clock_source", kClockAuto);
+	/* clock_source is a retired key: it stays in saved data but is never read (Music Director
+	 * is the one clock). New collections still carry it, with an empty value. */
+	obs_data_set_default_string(s, "clock_source", "");
 	obs_data_set_default_int(s, "sync_offset_ms", 0);
 	obs_data_set_default_double(s, "fallback_bpm", 128.0);
 	obs_data_set_default_int(s, "seed", 7);
@@ -340,24 +303,11 @@ void cd_defaults(obs_data_t *s)
 	obs_data_set_default_bool(s, "adapt", true);
 	obs_data_set_default_double(s, "adapt_tau_s", 4.0);
 	obs_data_set_default_double(s, "polarity_threshold", 0.45);
-	/* Synesthesia (the only receiver) treats alpha as black, so black RGB is what reads as
-	 * transparent there: opaque output is the default; luma-to-alpha stays for other receivers */
+	/* black reads as transparent to receivers that treat alpha as black: opaque output is the
+	 * default; luma-to-alpha stays for other receivers */
 	obs_data_set_default_int(s, "output_mode", 0);
 	obs_data_set_default_double(s, "alpha_lo", 0.02);
 	obs_data_set_default_double(s, "alpha_hi", 0.20);
-
-	/* Synesthesia over OSC: ports must match Settings > OSC in Synesthesia (7000/7001 are
-	 * the defaults this dock ships with; Synesthesia's own ports are user-set) */
-	obs_data_set_default_bool(s, "syn_enabled", false);
-	obs_data_set_default_string(s, "syn_host", "127.0.0.1");
-	obs_data_set_default_int(s, "syn_send_port", 7000);
-	obs_data_set_default_int(s, "syn_feedback_port", 7001);
-	obs_data_set_default_string(s, "syn_pools", "");
-	obs_data_set_default_bool(s, "syn_on_breakdown", true);
-	obs_data_set_default_bool(s, "syn_on_drop", true);
-	obs_data_set_default_bool(s, "syn_bang_on_drop", false);
-	obs_data_set_default_int(s, "syn_groove_phrases", 0);
-	obs_data_set_default_double(s, "syn_lead_ms", 0.0);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -502,9 +452,15 @@ int free_deck(CdSource *c, int for_slot)
 {
 	if (c->slot_deck[for_slot] >= 0)
 		return c->slot_deck[for_slot]; /* re-prepare in place */
-	for (int i = 0; i < kDecks; ++i)
-		if (i != c->live && i != c->spare && i != c->slot_deck[0] && i != c->slot_deck[1])
+	for (int i = 0; i < kDecks; ++i) {
+		if (i == c->live || i == c->spare)
+			continue;
+		bool used = false;
+		for (int s = 0; s < cd::CutScheduler::kSlots; ++s)
+			used |= (s != for_slot && c->slot_deck[s] == i);
+		if (!used)
 			return i;
+	}
 	/* all busy: take the spare when nothing shows it */
 	if (c->spare >= 0 && !c->tr_active && !c->show_prev) {
 		const int d = c->spare;
@@ -535,110 +491,6 @@ void note(CdSource *c, const char *fmt, ...)
 	if (c->log.size() > 200)
 		c->log.pop_front();
 	c->log_seq++;
-}
-
-/* ------------------------------------------------------------------------- */
-/* Synesthesia over OSC (W2/W3)                                              */
-
-/* mx held: one line for the OSC log in the dock (beat position + reason) */
-void syn_note(CdSource *c, const char *fmt, ...)
-{
-	char buf[512];
-	va_list ap;
-	va_start(ap, fmt);
-	vsnprintf(buf, sizeof(buf), fmt, ap);
-	va_end(ap);
-	char ts[16];
-	snprintf(ts, sizeof(ts), "%7.2f  ", c->beats);
-	c->syn_log.push_back(std::string(ts) + buf);
-	if (c->syn_log.size() > 200)
-		c->syn_log.pop_front();
-	c->syn_log_seq++;
-}
-
-/* "tunnel \"acid\"" for the log: what the message carries */
-std::string osc_args_text(const cd::OscMessage &m)
-{
-	std::string s;
-	for (const cd::OscArg &a : m.args) {
-		s += " ";
-		if (a.type == cd::OscArg::Type::String)
-			s += "\"" + a.s + "\"";
-		else if (a.type == cd::OscArg::Type::Float) {
-			char buf[32];
-			snprintf(buf, sizeof(buf), "%.2f", a.f);
-			s += buf;
-		} else
-			s += std::to_string(a.i);
-	}
-	return s;
-}
-
-/* mx held: encode, queue, and log with the beat the message is aimed at */
-bool syn_send(CdSource *c, const cd::OscMessage &m, const char *why, double at_beat, double send_at_beat)
-{
-	std::vector<uint8_t> wire;
-	if (!cd::osc_encode(m, wire))
-		return false;
-	const bool queued = c->syn && c->syn->send(wire.data(), wire.size());
-	if (queued)
-		c->syn_send_ns = os_gettime_ns();
-	char lead[40] = "";
-	if (send_at_beat < at_beat - 1e-9)
-		snprintf(lead, sizeof(lead), " (%+.0f ms early)",
-			 (at_beat - send_at_beat) * 60000.0 / std::max(1.0, c->bpm));
-	const std::string tag = queued ? ("  [" + std::string(why) + "]") : std::string("  [NOT SENT]");
-	syn_note(c, "-> %s%s%s%s", m.address.c_str(), osc_args_text(m).c_str(), lead, tag.c_str());
-	return queued;
-}
-
-/* mx held: draw a scene from one pool's shuffle bag and send it */
-void syn_launch_pool(CdSource *c, cd::Section pool, const char *why, double at_beat, double send_at_beat, bool bang)
-{
-	const int idx = std::clamp(static_cast<int>(pool), 0, 2);
-	cd::SceneEntry entry;
-	if (!c->syn_shuf[idx].next(entry)) {
-		syn_note(c, "-- %s pool is empty, nothing to launch [%s]", sec_name(pool), why);
-		return;
-	}
-	const cd::OscMessage m = cd::osc_scene(entry.scene, entry.preset);
-	if (syn_send(c, m, why, at_beat, send_at_beat)) {
-		c->syn_now = entry.scene;
-		c->syn_now_preset = entry.preset;
-		note(c, "OSC scene '%s' at beat %.2f (%s)", entry.label().c_str(), at_beat, why);
-	}
-	if (bang)
-		syn_send(c, cd::osc_bang(1), "scene bang 1", at_beat, send_at_beat);
-}
-
-/* mx held: everything Synesthesia said back on the feedback port */
-void syn_drain(CdSource *c)
-{
-	std::vector<uint8_t> wire;
-	for (int budget = 0; budget < 16 && c->syn && c->syn->pop(wire); ++budget) {
-		cd::OscMessage m;
-		if (!cd::osc_decode(wire, m))
-			continue;
-		c->syn_echo_ns = os_gettime_ns();
-		if (m.address.rfind("/scenes/", 0) == 0 && m.address.size() > 8) {
-			const std::string name = m.address.substr(8);
-			syn_note(c, "<- %s%s", m.address.c_str(), osc_args_text(m).c_str());
-			c->syn_now = name; /* Synesthesia is the authority on what is live */
-			c->syn_now_preset.clear();
-			if (std::find(c->syn_heard.begin(), c->syn_heard.end(), name) == c->syn_heard.end()) {
-				c->syn_heard.insert(c->syn_heard.begin(), name);
-				if (c->syn_heard.size() > 64)
-					c->syn_heard.pop_back();
-			}
-		} else {
-			syn_note(c, "<- %s%s", m.address.c_str(), osc_args_text(m).c_str());
-		}
-	}
-}
-
-bool syn_linked(const CdSource *c)
-{
-	return c->syn_echo_ns && os_gettime_ns() - c->syn_echo_ns < 10ull * 1000000000ull;
 }
 
 /* mx held: folder tags/weights/enabled and clip overrides onto the loaded library */
@@ -696,9 +548,12 @@ void do_cut(CdSource *c, const cd::SchedEvent &e)
 	c->cut_err_max = std::max(c->cut_err_max, std::fabs(err_ms));
 	c->cut_err_n++;
 	const double ready_s = (os_gettime_ns() - c->decks[d].load_ns) / 1e9;
-	note(c, "%s%s '%s' from %.1fs x%.2f%s%s", e.slot == cd::CutScheduler::kDrop ? "DROP " : "",
-	     tr_name(e.transition), clip_name(c, c->decks[d].clip), c->decks[d].inpoint, c->decks[d].speed,
-	     c->decks[d].lv.invert() ? " inverted" : "", c->deferred ? " (late: deck was loading)" : "");
+	const char *tag = e.slot == cd::CutScheduler::kDrop
+				  ? "DROP "
+				  : (e.slot == cd::CutScheduler::kBreakdown ? "BREAKDOWN " : "");
+	note(c, "%s%s '%s' from %.1fs x%.2f%s%s", tag, tr_name(e.transition), clip_name(c, c->decks[d].clip),
+	     c->decks[d].inpoint, c->decks[d].speed, c->decks[d].lv.invert() ? " inverted" : "",
+	     c->deferred ? " (late: deck was loading)" : "");
 	obs_log(LOG_INFO,
 		"'%s': CUT #%llu slot %d deck %d '%s' target beat %.3f frame beat %.3f err %+.1f ms %s %.2f "
 		"(ready %.2fs before) in %.1fs (media at %.2fs) x%.2f%s%s inv %d",
@@ -727,6 +582,8 @@ void on_event(CdSource *c, const cd::SchedEvent &e)
 		}
 		deck_load(c, d, p);
 		c->slot_deck[e.slot] = d;
+		if (e.section_fallback) /* the section edge could not use its armed deck (spec 5) */
+			note(c, "section -> %s: armed deck not ready, next bar line", sec_name(e.section));
 		obs_log(LOG_INFO, "'%s': prepare slot %d deck %d '%s' (%s, hold %.1fs) %s",
 			obs_source_get_name(c->self), e.slot, d, clip_name(c, p.clip), sec_name(e.section), e.hold_s,
 			p.reason.c_str());
@@ -739,6 +596,10 @@ void on_event(CdSource *c, const cd::SchedEvent &e)
 				obs_source_get_name(c->self), e.at_beat, e.slot);
 			return;
 		}
+		/* a section-triggered cut: lands on section_beat (spec 5, gate 3 compares seq/beat) */
+		if (e.section_edge)
+			obs_log(LOG_INFO, "cut %s seq=%lld beat=%lld", sec_name_up(e.section), (long long)e.section_seq,
+				(long long)std::llround(e.at_beat));
 		if (!c->decks[d].ready) {
 			c->deferred = true;
 			c->deferred_ev = e;
@@ -759,56 +620,72 @@ void on_event(CdSource *c, const cd::SchedEvent &e)
 		c->stutter_on = false;
 		note(c, "stutter off");
 		break;
-	case T::SceneLaunch:
-		/* W3: the launch the scheduler planned on the beat of this transition */
-		syn_launch_pool(c, e.section, e.reason.c_str(), e.at_beat, e.send_at_beat, e.bang);
-		break;
 	}
 }
 
 /* ------------------------------------------------------------------------- */
 /* clock                                                                      */
 
+/* Palette Director's drop colour cycle (spec 4.4): Clip Director's stutter follows it. Not a
+ * clock; the proc is absent when Palette Director is not loaded, and then the stutter is off. */
+void read_drop_cycle(bool &active, int &steps_per_beat)
+{
+	active = false;
+	steps_per_beat = 2;
+	proc_handler_t *ph = obs_get_proc_handler();
+	if (!ph)
+		return;
+	calldata_t cd;
+	calldata_init(&cd);
+	if (proc_handler_call(ph, kPdDropCycleProc, &cd)) {
+		active = calldata_bool(&cd, "active");
+		steps_per_beat = std::clamp((int)calldata_int(&cd, "steps_per_beat"), 1, 16);
+	}
+	calldata_free(&cd);
+}
+
 void read_clock(CdSource *c, float seconds, cd::ClockSample &out)
 {
-	pd_clock k;
-	bool ok = false;
-	const std::string &sel = c->cfg.clock;
-	if (sel != kClockFree) {
-		if (sel.empty()) {
-			ok = pd_clock_read(0, obs_source_get_name(c->self), nullptr, &k);
-			if (!ok)
-				ok = pd_clock_read(0, nullptr, nullptr, &k);
-		} else {
-			const size_t bar = sel.find('|');
-			const std::string src = sel.substr(0, bar);
-			const std::string flt = bar == std::string::npos ? "" : sel.substr(bar + 1);
-			ok = pd_clock_read(0, src.c_str(), flt.c_str(), &k);
-		}
+	out = cd::ClockSample();
+	struct director_clock k;
+	const bool ok = director_clock_read(&k);
+
+	director_follow::Sample fs;
+	fs.ok = ok;
+	if (ok) {
+		fs.beat = k.beat;
+		fs.phrase = k.phrase;
+		fs.section = std::clamp((int)k.section, 0, 2);
+		fs.section_seq = k.section_seq;
+		fs.section_beat = k.section_beat;
+		fs.section_forced = k.section_forced;
+		fs.epoch = k.epoch;
 	}
+	const director_follow::Edges edges = c->follower.update(fs);
+	if (edges.lost)
+		obs_log(LOG_INFO, "Music Director not found: clips hold");
+	else if (edges.found)
+		obs_log(LOG_INFO, "following Music Director");
+
 	if (ok) {
 		c->bpm = k.bpm > 1.0 ? k.bpm : c->cfg.fallback_bpm;
 		c->beats = k.beats_now + c->cfg.sync_ms / 1000.0 * c->bpm / 60.0;
-		c->section = (cd::Section)std::clamp(k.section, 0, 2);
-		out.drop_cycle = k.drop_cycle;
-		out.drop_cycle_steps_per_beat = k.drop_cycle_steps_per_beat;
+		c->section = (cd::Section)std::clamp((int)k.section, 0, 2);
+		int drop_steps = 2;
+		read_drop_cycle(out.drop_cycle, drop_steps);
+		out.drop_cycle_steps_per_beat = drop_steps;
 		out.phrase_beats = k.phrase_beats;
 		out.paused = k.paused;
-		c->free_beats = c->beats;
-	} else {
-		c->bpm = std::max(30.0, c->cfg.fallback_bpm);
-		c->free_beats += seconds * c->bpm / 60.0;
-		c->beats = c->free_beats;
-		c->section = cd::Section::Groove;
+		out.section_seq = k.section_seq;
+		out.section_beat = k.section_beat;
+		out.section_forced = k.section_forced;
+		out.epoch = k.epoch;
+		out.valid = true;
 	}
-	if (ok != c->clock_was_ok)
-		obs_log(LOG_INFO, "'%s': clock %s", obs_source_get_name(c->self),
-			ok ? "following Palette Director" : "free-running (Palette Director clock not available)");
-	c->clock_was_ok = ok;
+	/* else: no Music Director, the clips hold (the scheduler emits nothing for an invalid sample) */
 	c->clock_ok = ok;
-	out.valid = true;
-	/* half a frame of lookahead: a cut fires on the frame nearest its beat, not the first one after */
-	out.beats = c->beats + 0.5 * std::clamp((double)seconds, 0.0, 0.05) * c->bpm / 60.0;
+
+	out.beats = c->beats + (ok ? 0.5 * std::clamp((double)seconds, 0.0, 0.05) * c->bpm / 60.0 : 0.0);
 	out.bpm = c->bpm;
 	out.section = c->section;
 }
@@ -829,39 +706,8 @@ void apply(CdSource *c, obs_data_t *settings, bool force_reload)
 	if (reload)
 		lib = cdobs::load_library(n.folders);
 
-	/* the OSC transport is switched on/off by the settings; the old one is stopped outside
-	 * the lock, so turning Synesthesia off never holds up the graphics thread for long */
-	std::unique_ptr<cdnet::OscTransport> recycle;
-	{
-		std::lock_guard<std::mutex> g(c->mx);
-		const bool link_changed = !c->syn || n.syn_host != c->cfg.syn_host ||
-					  n.syn_send_port != c->cfg.syn_send_port ||
-					  n.syn_feedback_port != c->cfg.syn_feedback_port;
-		if (n.syn_enabled && link_changed) {
-			auto fresh = std::make_unique<cdnet::OscTransport>();
-			std::string err;
-			if (fresh->start(n.syn_host, n.syn_send_port, n.syn_feedback_port, &err)) {
-				recycle = std::move(c->syn);
-				c->syn = std::move(fresh);
-				note(c, "OSC %s:%d -> feedback port %d", n.syn_host.c_str(), n.syn_send_port,
-				     n.syn_feedback_port);
-			} else {
-				note(c, "OSC transport did not start: %s", err.c_str());
-			}
-		} else if (!n.syn_enabled && c->syn) {
-			recycle = std::move(c->syn);
-			note(c, "OSC transport stopped");
-		}
-		if (n.syn_pools_json != c->cfg.syn_pools_json) {
-			for (int i = 0; i < 3; ++i)
-				c->syn_shuf[i].set_entries(n.syn_pools.of(static_cast<cd::Section>(i)));
-		}
-	}
-	recycle.reset();
-
 	std::lock_guard<std::mutex> g(c->mx);
 	c->cfg = n;
-	c->cfg.sc.scene.auto_on = n.syn_enabled; /* Synesthesia off: the scheduler plans no launches */
 	if (reload) {
 		c->lib = std::move(lib);
 		apply_meta(c);
@@ -870,7 +716,7 @@ void apply(CdSource *c, obs_data_t *settings, bool force_reload)
 		obs_log(LOG_INFO, "'%s': library %zu clips (%d with ingest stats)", obs_source_get_name(c->self),
 			c->lib.clips.size(), c->lib.with_stats);
 		c->picker = std::make_unique<cd::ClipPicker>(c->lib.folders, c->lib.clips, c->cfg.pk);
-		for (int s = 0; s < 2; ++s) /* prepared decks refer to the old library */
+		for (int s = 0; s < cd::CutScheduler::kSlots; ++s) /* prepared decks refer to the old library */
 			c->slot_deck[s] = -1;
 		c->sched = std::make_unique<cd::CutScheduler>(c->cfg.sc);
 		if (c->live >= 0 && c->decks[c->live].clip >= (int)c->lib.clips.size())
@@ -883,8 +729,6 @@ void apply(CdSource *c, obs_data_t *settings, bool force_reload)
 		c->picker->set_config(c->cfg.pk);
 		c->sched->set_config(c->cfg.sc);
 	}
-	if (c->sched)
-		c->sched->set_scene_hold(c->syn_hold); /* a reload replaces the scheduler: keep Hold */
 }
 
 void cd_update(void *data, obs_data_t *settings)
@@ -928,7 +772,6 @@ void cd_destroy(void *data)
 	c->lq_cv.notify_all();
 	if (c->loader.joinable())
 		c->loader.join();
-	c->syn.reset(); /* joins the OSC send/receive threads before anything else is freed */
 	for (auto &d : c->decks)
 		deck_release(d.src);
 	obs_enter_graphics();
@@ -967,7 +810,6 @@ void cd_tick(void *data, float seconds)
 	read_clock(c, seconds, clk);
 	for (const auto &e : c->sched->tick(clk))
 		on_event(c, e);
-	syn_drain(c); /* Synesthesia's OSC output: the link signal, and the scene names to import */
 	if (c->deferred) {
 		const int d = c->slot_deck[c->deferred_ev.slot];
 		if (d < 0) {
@@ -989,7 +831,7 @@ void cd_tick(void *data, float seconds)
 			"'%s': status %s bpm %.1f beat %.2f %s, %llu cuts, frame error mean %.1f ms max %.1f ms, "
 			"deck loads %d mean %.0f ms max %.0f ms, start-point retries %d unconfirmed %d | levels: "
 			"%llu samples, measure mean %.3f ms max %.3f ms, live lo %.3f scale %.2f gamma %.2f str %.2f inv %d",
-			obs_source_get_name(c->self), c->clock_ok ? "PD" : "free", c->bpm, c->beats,
+			obs_source_get_name(c->self), c->clock_ok ? "MD" : "idle", c->bpm, c->beats,
 			sec_name(c->section), (unsigned long long)c->cuts, c->cut_err_sum / c->cut_err_n,
 			c->cut_err_max, c->load_n, c->load_n ? c->load_ms_sum / c->load_n : 0.0, c->load_ms_max,
 			c->verify_retries, c->verify_fail, (unsigned long long)c->meas_n,
@@ -1230,34 +1072,6 @@ bool on_rescan(obs_properties_t *, obs_property_t *, void *data)
 	return false;
 }
 
-void add_clock_list(obs_property_t *p)
-{
-	obs_property_list_add_string(p, obs_module_text("Clock.Auto"), kClockAuto);
-	proc_handler_t *ph = obs_get_proc_handler();
-	calldata_t cd;
-	calldata_init(&cd);
-	if (ph && proc_handler_call(ph, PD_CLOCK_PROC_INSTANCES, &cd)) {
-		obs_data_t *root = obs_data_create_from_json(
-			(std::string("{\"a\":") + (calldata_string(&cd, "json") ? calldata_string(&cd, "json") : "[]") +
-			 "}")
-				.c_str());
-		obs_data_array_t *arr = root ? obs_data_get_array(root, "a") : nullptr;
-		for (size_t i = 0; arr && i < obs_data_array_count(arr); ++i) {
-			obs_data_t *it = obs_data_array_item(arr, i);
-			const std::string src = obs_data_get_string(it, "source");
-			const std::string flt = obs_data_get_string(it, "filter");
-			const std::string label = src + " / " + flt;
-			const std::string value = src + "|" + flt;
-			obs_property_list_add_string(p, label.c_str(), value.c_str());
-			obs_data_release(it);
-		}
-		obs_data_array_release(arr);
-		obs_data_release(root);
-	}
-	calldata_free(&cd);
-	obs_property_list_add_string(p, obs_module_text("Clock.Free"), kClockFree);
-}
-
 void add_transition_list(obs_properties_t *g, const char *key, const char *label)
 {
 	obs_property_t *p = obs_properties_add_list(g, key, label, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
@@ -1268,6 +1082,13 @@ void add_transition_list(obs_properties_t *g, const char *key, const char *label
 
 obs_properties_t *cd_properties(void *data)
 {
+	CdSource *c = static_cast<CdSource *>(data);
+	bool clock_ok = false;
+	if (c) {
+		std::lock_guard<std::mutex> g(c->mx);
+		clock_ok = c->clock_ok;
+	}
+
 	obs_properties_t *pr = obs_properties_create();
 	obs_properties_add_editable_list(pr, "folders", obs_module_text("Folders"), OBS_EDITABLE_LIST_TYPE_FILES,
 					 nullptr, nullptr);
@@ -1276,8 +1097,10 @@ obs_properties_t *cd_properties(void *data)
 	obs_properties_add_button2(pr, "hold", obs_module_text("Hold"), on_hold, data);
 
 	obs_properties_t *ck = obs_properties_create();
-	add_clock_list(obs_properties_add_list(ck, "clock_source", obs_module_text("ClockSource"), OBS_COMBO_TYPE_LIST,
-					       OBS_COMBO_FORMAT_STRING));
+	/* the clock is Music Director's: the retired clock_source key is neither shown nor read */
+	obs_properties_add_text(ck, "md_status",
+				clock_ok ? obs_module_text("Clock.Following") : obs_module_text("Clock.Waiting"),
+				OBS_TEXT_INFO);
 	obs_properties_add_int_slider(ck, "sync_offset_ms", obs_module_text("SyncOffset"), -200, 200, 1);
 	obs_properties_add_float(ck, "fallback_bpm", obs_module_text("FallbackBpm"), 60.0, 200.0, 0.5);
 	obs_properties_add_float(ck, "preroll_beats", obs_module_text("Preroll"), 0.5, 4.0, 0.5);
@@ -1325,24 +1148,6 @@ obs_properties_t *cd_properties(void *data)
 	obs_properties_add_float_slider(out, "alpha_lo", obs_module_text("AlphaLo"), 0, 0.5, 0.01);
 	obs_properties_add_float_slider(out, "alpha_hi", obs_module_text("AlphaHi"), 0.01, 1, 0.01);
 	obs_properties_add_group(pr, "g_output", obs_module_text("Group.Output"), OBS_GROUP_NORMAL, out);
-
-	/* Synesthesia over OSC: the dock is the main control surface, this is the same settings */
-	obs_properties_t *syn = obs_properties_create();
-	obs_properties_add_bool(syn, "syn_enabled", obs_module_text("Syn.Enabled"));
-	obs_properties_add_text(syn, "syn_host", obs_module_text("Syn.Host"), OBS_TEXT_DEFAULT);
-	obs_properties_add_int(syn, "syn_send_port", obs_module_text("Syn.SendPort"), 1, 65535, 1);
-	obs_properties_add_int(syn, "syn_feedback_port", obs_module_text("Syn.FeedbackPort"), 1, 65535, 1);
-	obs_properties_add_bool(syn, "syn_on_breakdown", obs_module_text("Syn.OnBreakdown"));
-	obs_properties_add_bool(syn, "syn_on_drop", obs_module_text("Syn.OnDrop"));
-	obs_property_t *gp = obs_properties_add_list(syn, "syn_groove_phrases", obs_module_text("Syn.DuringGroove"),
-						     OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
-	obs_property_list_add_int(gp, obs_module_text("Syn.Never"), 0);
-	obs_property_list_add_int(gp, obs_module_text("Syn.Every2Phrases"), 2);
-	obs_property_list_add_int(gp, obs_module_text("Syn.Every4Phrases"), 4);
-	obs_properties_add_bool(syn, "syn_bang_on_drop", obs_module_text("Syn.BangOnDrop"));
-	obs_properties_add_int_slider(syn, "syn_lead_ms", obs_module_text("Syn.Lead"), 0, 500, 10);
-	obs_properties_add_text(syn, "syn_pools", obs_module_text("Syn.Pools"), OBS_TEXT_MULTILINE);
-	obs_properties_add_group(pr, "g_syn", obs_module_text("Group.Synesthesia"), OBS_GROUP_CHECKABLE, syn);
 	return pr;
 }
 
@@ -1444,7 +1249,7 @@ bool status(obs_source_t *src, Status &o)
 		return false;
 	std::lock_guard<std::mutex> g(c->mx);
 	o = Status();
-	o.clock_pd = c->clock_ok;
+	o.clock_md = c->clock_ok;
 	o.bpm = c->bpm;
 	o.beats = c->beats;
 	o.section = (int)c->section;
@@ -1453,6 +1258,7 @@ bool status(obs_source_t *src, Status &o)
 	o.stutter = c->stutter_on;
 	clip_info(c, c->live, o.live);
 	clip_info(c, c->slot_deck[cd::CutScheduler::kNext], o.next);
+	clip_info(c, c->slot_deck[cd::CutScheduler::kBreakdown], o.breakdown);
 	clip_info(c, c->slot_deck[cd::CutScheduler::kDrop], o.drop);
 	std::vector<int> counts(c->lib.folders.size(), 0);
 	for (const auto &clip : c->lib.clips) {
@@ -1479,48 +1285,6 @@ bool status(obs_source_t *src, Status &o)
 	o.cut_err_mean_ms = c->cut_err_n ? c->cut_err_sum / c->cut_err_n : 0.0;
 	o.log_seq = c->log_seq;
 	o.log.assign(c->log.begin(), c->log.end());
-
-	/* Synesthesia over OSC */
-	cdapi::SynInfo &sy = o.syn;
-	sy.enabled = c->cfg.syn_enabled;
-	sy.running = c->syn != nullptr;
-	sy.linked = syn_linked(c);
-	sy.host = c->cfg.syn_host;
-	sy.send_port = c->cfg.syn_send_port;
-	sy.feedback_port = c->cfg.syn_feedback_port;
-	sy.auto_on = c->cfg.syn_enabled;
-	sy.on_breakdown = c->cfg.syn_on_breakdown;
-	sy.on_drop = c->cfg.syn_on_drop;
-	sy.bang_on_drop = c->cfg.syn_bang_on_drop;
-	sy.groove_phrases = c->cfg.syn_groove_phrases;
-	sy.lead_ms = c->cfg.syn_lead_ms;
-	sy.hold = c->syn_hold;
-	sy.now_scene = c->syn_now;
-	sy.now_preset = c->syn_now_preset;
-	sy.next_scene_beat = c->sched ? c->sched->next_scene_beat() : 0.0;
-	{
-		const int sec = std::clamp((int)c->section, 0, 2);
-		cd::SceneEntry nxt;
-		bool have = c->syn_shuf[sec].peek(nxt);
-		for (int i = 0; i < 3 && !have; ++i) { /* the current pool can be empty */
-			if (i != sec)
-				have = c->syn_shuf[i].peek(nxt);
-		}
-		if (have) {
-			sy.next_scene = nxt.scene;
-			sy.next_preset = nxt.preset;
-		}
-	}
-	sy.sent = c->syn ? c->syn->sent() : 0;
-	sy.received = c->syn ? c->syn->received() : 0;
-	if (c->syn_send_ns)
-		sy.since_send_ms = (int)((os_gettime_ns() - c->syn_send_ns) / 1000000ull);
-	if (c->syn_echo_ns)
-		sy.since_echo_ms = (int)((os_gettime_ns() - c->syn_echo_ns) / 1000000ull);
-	sy.pools_json = c->cfg.syn_pools_json;
-	sy.heard = c->syn_heard;
-	sy.log_seq = c->syn_log_seq;
-	sy.log.assign(c->syn_log.begin(), c->syn_log.end());
 	return true;
 }
 
@@ -1616,126 +1380,6 @@ void set_folder(obs_source_t *src, int index, int tag, double weight, bool enabl
 		obs_source_update(src, nullptr);
 	}
 	obs_data_release(st);
-}
-
-/* ---- Synesthesia over OSC (W2/W3) ------------------------------------------------------- */
-
-namespace {
-
-/* write one or more settings keys and let the source pick them up (apply() restarts the
- * transport when the link changed, and rebuilds a pool's shuffle bag when its entries did) */
-template<typename F> void syn_update(obs_source_t *src, F &&fn)
-{
-	obs_data_t *st = obs_source_get_settings(src);
-	fn(st);
-	obs_source_update(src, nullptr);
-	obs_data_release(st);
-}
-
-} // namespace
-
-void syn_set_enabled(obs_source_t *src, bool enabled)
-{
-	syn_update(src, [enabled](obs_data_t *s) { obs_data_set_bool(s, "syn_enabled", enabled); });
-	CdSource *c = cd_of(src);
-	if (!c)
-		return;
-	std::lock_guard<std::mutex> g(c->mx);
-	if (c->sched)
-		c->sched->set_scene_hold(c->syn_hold);
-	note(c, "Synesthesia control %s", enabled ? "on" : "off");
-}
-
-void syn_set_link(obs_source_t *src, const std::string &host, int send_port, int feedback_port)
-{
-	syn_update(src, [&](obs_data_t *s) {
-		obs_data_set_string(s, "syn_host", host.c_str());
-		obs_data_set_int(s, "syn_send_port", std::clamp(send_port, 1, 65535));
-		obs_data_set_int(s, "syn_feedback_port", std::clamp(feedback_port, 1, 65535));
-	});
-}
-
-void syn_set_trigger(obs_source_t *src, bool on_breakdown, bool on_drop, int groove_phrases, double lead_ms,
-		     bool bang_on_drop)
-{
-	syn_update(src, [&](obs_data_t *s) {
-		obs_data_set_bool(s, "syn_on_breakdown", on_breakdown);
-		obs_data_set_bool(s, "syn_on_drop", on_drop);
-		obs_data_set_int(s, "syn_groove_phrases", std::clamp(groove_phrases, 0, 4));
-		obs_data_set_double(s, "syn_lead_ms", std::clamp(lead_ms, 0.0, 500.0));
-		obs_data_set_bool(s, "syn_bang_on_drop", bang_on_drop);
-	});
-}
-
-void syn_set_pools(obs_source_t *src, const std::string &pools_json)
-{
-	syn_update(src, [&](obs_data_t *s) { obs_data_set_string(s, "syn_pools", pools_json.c_str()); });
-}
-
-void syn_next(obs_source_t *src)
-{
-	CdSource *c = cd_of(src);
-	if (!c)
-		return;
-	std::lock_guard<std::mutex> g(c->mx);
-	if (!c->syn)
-		return;
-	syn_launch_pool(c, c->section, "manual: next scene", c->beats, c->beats, false);
-}
-
-void syn_hold(obs_source_t *src, bool hold)
-{
-	CdSource *c = cd_of(src);
-	if (!c)
-		return;
-	std::lock_guard<std::mutex> g(c->mx);
-	c->syn_hold = hold;
-	if (c->sched)
-		c->sched->set_scene_hold(hold);
-	syn_note(c, "-- Hold scene %s", hold ? "on" : "off");
-	note(c, "hold scene %s (dock)", hold ? "on" : "off");
-}
-
-void syn_hold_toggle(obs_source_t *src)
-{
-	CdSource *c = cd_of(src);
-	if (!c)
-		return;
-	std::lock_guard<std::mutex> g(c->mx);
-	c->syn_hold = !c->syn_hold;
-	if (c->sched)
-		c->sched->set_scene_hold(c->syn_hold);
-	syn_note(c, "-- Hold scene %s", c->syn_hold ? "on" : "off");
-	note(c, "hold scene %s (hotkey)", c->syn_hold ? "on" : "off");
-}
-
-void syn_bang(obs_source_t *src)
-{
-	CdSource *c = cd_of(src);
-	if (!c)
-		return;
-	std::lock_guard<std::mutex> g(c->mx);
-	if (!c->syn)
-		return;
-	syn_send(c, cd::osc_bang(1), "manual: fire bang 1", c->beats, c->beats);
-}
-
-void syn_launch(obs_source_t *src, int pool, int index)
-{
-	CdSource *c = cd_of(src);
-	if (!c)
-		return;
-	std::lock_guard<std::mutex> g(c->mx);
-	if (!c->syn)
-		return;
-	const int p = std::clamp(pool, 0, 2);
-	const std::vector<cd::SceneEntry> &entries = c->cfg.syn_pools.of(static_cast<cd::Section>(p));
-	if (index < 0 || index >= (int)entries.size())
-		return;
-	const cd::SceneEntry &en = entries[(size_t)index];
-	syn_send(c, cd::osc_scene(en.scene, en.preset), "manual: pool slot", c->beats, c->beats);
-	c->syn_now = en.scene;
-	c->syn_now_preset = en.preset;
 }
 
 } // namespace cdapi

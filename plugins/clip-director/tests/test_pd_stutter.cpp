@@ -1,107 +1,81 @@
-// P6 gate: Clip Director's stutter is locked to Palette Director's drop colour cycle.
+// Clip Director's stutter follows Palette Director's drop colour cycle (spec 4.4, 5).
 //
-// Palette Director's real Director (built from ../palette-director) analyses a synthetic WAV
-// fixture (groove -> breakdown -> drop at 128 BPM). Every video frame (735 samples = 60 fps)
-// its snapshot becomes a ClockSample, exactly as the OBS source builds one from the v1.1 clock
-// API, and drives Clip Director's CutScheduler. Checks, per drop-cycle rate and length:
-//   - one stutter flip per palette step of the cycle, each within one frame of the step
+// The drop colour cycle is a Palette Director signal, not a clock, so it is scripted here as
+// `drop_cycle` / `drop_cycle_steps_per_beat` samples (no cross-plugin build). Checks, per cycle
+// length and rate:
+//   - one stutter flip per palette step of the cycle, each on its step beat
 //   - stutter starts with the drop cut and ends when the cycle ends
-//   - the drop clip cuts in on the drop downbeat; no other cut fires under the stutter
+//   - the drop clip cuts in on the section beat; no other cut fires under the stutter
 #include "doctest.h"
 
 #include <cmath>
-#include <string>
 #include <vector>
 
 #include "scheduler.h"
 
-#include "director.h"
-#include "test_helpers.h" // Palette Director's: make_set, gen_breakdown
+using namespace cd;
 
 namespace {
 
-constexpr uint32_t kSr = 44100;
-constexpr std::size_t kFrame = 735; // 60 fps
-constexpr double kFrameS = static_cast<double>(kFrame) / kSr;
+constexpr double kBpm = 128.0;
 
 struct Run {
-	std::vector<double> pd_steps;   // wall time of each drop-cycle palette step
-	double pd_drop = -1.0;          // wall time Palette Director entered DROP
-	double pd_cycle_end = -1.0;     // wall time drop_cycle went false again
-	std::vector<double> cd_flips;   // wall time of each StutterFlip
-	std::vector<bool> cd_flip_prev; // which clip each flip shows
-	double cd_on = -1.0, cd_off = -1.0;
-	std::vector<double> cd_cuts; // wall time of every Cut
-	std::vector<int> cd_cut_slot;
+	std::vector<double> flips;    // at_beat of each StutterFlip
+	std::vector<bool> flip_prev;  // which clip each flip shows
+	double on = -1.0, off = -1.0; // tick beats the stutter turned on / off
+	std::vector<double> cut_tick; // tick beat of every Cut
+	std::vector<double> cut_beat; // at_beat of every Cut
+	std::vector<int> cut_slot;
 };
 
-pd::SetFile cycle_set(int bars, int spb)
-{
-	pd::SetFile s = pdtest::make_set(6, "Pal 5");
-	s.director.random_off = false;
-	s.director.seed = 7;
-	s.director.drop_cycle = true;
-	s.director.drop_cycle_chance = 1.0f;
-	s.director.drop_cycle_bars = bars;
-	s.director.drop_cycle_steps_per_beat = spb;
-	return s;
-}
-
-Run run(int bars, int spb)
+// groove 0..32, breakdown 32..64, drop from 64; the drop colour cycle runs from 64 for
+// `cycle_beats` beats.
+Run run(int cycle_beats, int spb)
 {
 	Run r;
-	pd::Director d(cycle_set(bars, spb));
-	const std::vector<float> m = pdtest::gen_breakdown(128.0, 8, 4, 8 + 4 * bars).to_float();
-
-	cd::SchedulerConfig cfg;
+	SchedulerConfig cfg;
 	cfg.preroll_beats = 2.0;
-	cd::CutScheduler sched(cfg);
-
-	std::size_t seen = 0;
-	bool was_cycle = false;
-	pd::Section was_sec = pd::Section::Groove;
-	for (std::size_t i = 0; i < m.size(); i += kFrame) {
-		const std::size_t n = std::min(kFrame, m.size() - i);
-		d.push_audio(m.data() + i, n, kSr);
-		const double t = static_cast<double>(i + n) / kSr;
-
-		// Palette Director's side
-		const auto evs = d.events();
-		for (; seen < evs.size(); ++seen) {
-			const auto &e = evs[seen];
-			if (e.type == pd::Event::Type::PaletteChange &&
-			    e.detail.find("drop cycle") != std::string::npos)
-				r.pd_steps.push_back(t);
+	CutScheduler s(cfg);
+	const double per_frame = kBpm / 60.0 / 60.0;
+	const double limit = 64.0 + cycle_beats + 4.0;
+	/* b = n * per_frame (not a running sum) so the cycle boundaries land exactly on frames */
+	for (int n = 0;; ++n) {
+		const double b = n * per_frame;
+		if (b >= limit)
+			break;
+		ClockSample c;
+		c.valid = true;
+		c.beats = b;
+		c.bpm = kBpm;
+		if (b < 32.0) {
+			c.section = Section::Groove;
+			c.section_seq = 1;
+			c.section_beat = 0;
+		} else if (b < 64.0) {
+			c.section = Section::Breakdown;
+			c.section_seq = 2;
+			c.section_beat = 32;
+		} else {
+			c.section = Section::Drop;
+			c.section_seq = 3;
+			c.section_beat = 64;
 		}
-		const pd::DirectorState st = d.snapshot();
-		if (st.section == pd::Section::Drop && was_sec != pd::Section::Drop && r.pd_drop < 0)
-			r.pd_drop = t;
-		if (was_cycle && !st.drop_cycle && r.pd_cycle_end < 0)
-			r.pd_cycle_end = t;
-		was_sec = st.section;
-		was_cycle = st.drop_cycle;
-
-		// the clock sample the OBS source would read this frame
-		cd::ClockSample clk;
-		clk.valid = true;
-		clk.beats = static_cast<double>(st.beat) + st.beat_frac;
-		clk.bpm = st.bpm > 1.0f ? st.bpm : 128.0;
-		clk.section = static_cast<cd::Section>(static_cast<int>(st.section));
-		clk.drop_cycle = st.drop_cycle;
-		clk.drop_cycle_steps_per_beat = spb;
-		clk.paused = st.paused;
-		for (const auto &e : sched.tick(clk)) {
-			using T = cd::SchedEvent::Type;
+		c.epoch = 1;
+		c.drop_cycle = b >= 64.0 && b < 64.0 + cycle_beats;
+		c.drop_cycle_steps_per_beat = spb;
+		for (const auto &e : s.tick(c)) {
+			using T = SchedEvent::Type;
 			if (e.type == T::StutterOn)
-				r.cd_on = t;
+				r.on = b;
 			else if (e.type == T::StutterOff)
-				r.cd_off = t;
+				r.off = b;
 			else if (e.type == T::StutterFlip) {
-				r.cd_flips.push_back(t);
-				r.cd_flip_prev.push_back(e.show_prev);
+				r.flips.push_back(e.at_beat);
+				r.flip_prev.push_back(e.show_prev);
 			} else if (e.type == T::Cut) {
-				r.cd_cuts.push_back(t);
-				r.cd_cut_slot.push_back(e.slot);
+				r.cut_tick.push_back(b);
+				r.cut_beat.push_back(e.at_beat);
+				r.cut_slot.push_back(e.slot);
 			}
 		}
 	}
@@ -110,43 +84,37 @@ Run run(int bars, int spb)
 
 } // namespace
 
-TEST_CASE("P6: stutter is locked to Palette Director's drop colour cycle (WAV fixture, 60 fps)")
+TEST_CASE("stutter is locked to the drop colour cycle rate and length (scripted samples)")
 {
-	struct Case {
-		int bars, spb, steps;
-	};
-	for (const Case c : {Case{1, 2, 8}, Case{1, 1, 4}, Case{1, 4, 16}, Case{2, 2, 16}, Case{4, 1, 16}}) {
-		INFO("bars " << c.bars << ", steps/beat " << c.spb);
-		const Run r = run(c.bars, c.spb);
+	const struct {
+		int cycle_beats, spb;
+	} cases[] = {{4, 1}, {4, 2}, {4, 4}, {8, 1}, {8, 2}, {8, 4}};
+	for (const auto &cs : cases) {
+		INFO("cycle " << cs.cycle_beats << " beats, steps/beat " << cs.spb);
+		const Run r = run(cs.cycle_beats, cs.spb);
+		const double per_frame = kBpm / 60.0 / 60.0;
 
-		REQUIRE(static_cast<int>(r.pd_steps.size()) == c.steps); // the fixture really cycles
-		REQUIRE(r.pd_drop > 0.0);
-		REQUIRE(r.pd_cycle_end > 0.0);
-
-		// one flip per palette step, each within one frame, alternating drop clip / outgoing clip
-		REQUIRE(r.cd_flips.size() == r.pd_steps.size());
-		double worst = 0.0;
-		for (std::size_t k = 0; k < r.cd_flips.size(); ++k) {
-			worst = std::max(worst, std::fabs(r.cd_flips[k] - r.pd_steps[k]));
-			CHECK(r.cd_flip_prev[k] == (k % 2 == 1));
+		// one flip per palette step, each on its exact step beat, alternating
+		REQUIRE(static_cast<int>(r.flips.size()) == cs.cycle_beats * cs.spb);
+		for (std::size_t k = 0; k < r.flips.size(); ++k) {
+			CHECK(r.flips[k] == doctest::Approx(64.0 + static_cast<double>(k) / cs.spb));
+			CHECK(r.flip_prev[k] == (k % 2 == 1));
 		}
-		CHECK(worst <= kFrameS + 1e-9);
-		MESSAGE("bars " << c.bars << " 1/" << 4 * c.spb << ": " << r.cd_flips.size()
-				<< " flips, worst offset to the palette step " << worst * 1000.0 << " ms");
 
-		// stutter spans the cycle
-		CHECK(std::fabs(r.cd_on - r.pd_drop) <= kFrameS + 1e-9);
-		CHECK(std::fabs(r.cd_off - r.pd_cycle_end) <= kFrameS + 1e-9);
+		// the stutter spans the cycle (within a frame)
+		REQUIRE(r.on > 0.0);
+		REQUIRE(r.off > 0.0);
+		CHECK(std::fabs(r.on - 64.0) <= per_frame + 1e-9);
+		CHECK(std::fabs(r.off - (64.0 + cs.cycle_beats)) <= per_frame + 1e-9);
 
-		// the drop clip cuts in on the drop downbeat ...
+		// the drop clip cuts in on the section beat, from the armed drop deck
 		bool drop_cut = false;
-		for (std::size_t k = 0; k < r.cd_cuts.size(); ++k)
-			if (r.cd_cut_slot[k] == cd::CutScheduler::kDrop &&
-			    std::fabs(r.cd_cuts[k] - r.pd_drop) <= kFrameS + 1e-9)
-				drop_cut = true;
+		for (std::size_t k = 0; k < r.cut_beat.size(); ++k)
+			drop_cut |= r.cut_slot[k] == CutScheduler::kDrop && r.cut_beat[k] == 64.0;
 		CHECK(drop_cut);
+
 		// ... and nothing else cuts while the stutter runs
-		for (double t : r.cd_cuts)
-			CHECK_FALSE((t > r.cd_on + 1e-9 && t < r.cd_off - 1e-9));
+		for (double t : r.cut_tick)
+			CHECK_FALSE((t > r.on + 1e-9 && t < r.off - 1e-9));
 	}
 }
