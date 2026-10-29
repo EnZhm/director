@@ -1,0 +1,50 @@
+/*
+Music Director
+Copyright (C) 2026 EnZhm
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along
+with this program. If not, see <https://www.gnu.org/licenses/>
+*/
+
+#include <obs-module.h>
+#include <plugin-support.h>
+#include "director-clock.h" /* compile-check the public consumer header (C) */
+
+OBS_DECLARE_MODULE()
+OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
+
+extern void music_director_clock_load(void);
+extern void music_director_clock_unload(void);
+extern void music_director_music_dock_load(void);
+extern void music_director_midi_dock_load(void);
+extern void music_director_midi_dock_unload(void);
+
+bool obs_module_load(void)
+{
+	obs_log(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
+
+	/* Music Director is the suite's one clock: it registers `director_clock`, the md_* hotkeys, the
+	 * scene-collection settings and the migration, then the docks. */
+	music_director_clock_load();
+	music_director_music_dock_load();
+	music_director_midi_dock_load();
+
+	return true;
+}
+
+void obs_module_unload(void)
+{
+	music_director_midi_dock_unload();
+	music_director_clock_unload();
+	obs_log(LOG_INFO, "plugin unloaded");
+}
