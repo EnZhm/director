@@ -28,7 +28,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include <obs.h>
 
-#include "director/director.h"
+#include "director/palette-director.h"
 #include "palette/palette.h"
 
 namespace pdhost {
@@ -58,8 +58,10 @@ struct DockView {
 	float mix = 1.0f;
 	double beats = 0.0;
 	struct pl_set set;
-	std::string audio_name;
-	bool audio_attached = false;
+	/* read-only clock status from Music Director (director_clock) */
+	bool md_found = false;
+	float clk_bpm = 0.0f;
+	int clk_section = 0;
 	std::vector<LogLine> log; // only lines with seq > the caller's cursor, oldest first
 	std::vector<TimelineSample> timeline;
 };

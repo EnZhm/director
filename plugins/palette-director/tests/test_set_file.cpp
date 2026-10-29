@@ -298,3 +298,46 @@ TEST_CASE("v1.0.1 drop_cycle keys: missing = disabled, every rate round-trips, b
 	CHECK_FALSE(pd_set_parse(bad.c_str(), &s, err, sizeof(err)));
 	CHECK(std::string(err).find("drop_cycle rate") != std::string::npos);
 }
+
+TEST_CASE("a spectrum-style set (16 palettes, 5-8 colours) round-trips byte-identical")
+{
+	/* Spectrum palettes (spec 4.1): 16 gradient_map palettes with 5-8 stops. Build it, write
+	 * it, parse it back and write it again: the writer is canonical, so the two texts must be
+	 * byte-identical, and loading the text must reproduce every palette and colour. */
+	struct pl_set s;
+	pl_set_init(&s);
+	snprintf(s.name, sizeof(s.name), "Spectrum");
+	snprintf(s.synesthesia_playlist, sizeof(s.synesthesia_playlist), "Spectrum");
+	s.n_palettes = 16;
+	for (int i = 0; i < 16; i++) {
+		pl_palette_default(&s.palettes[i], "");
+		snprintf(s.palettes[i].name, sizeof(s.palettes[i].name), "Band %02d", i);
+		s.palettes[i].mode = PL_MODE_GRADIENT;
+		const int n = 5 + (i % 4); // 5..8
+		s.palettes[i].n_colours = n;
+		for (int j = 0; j < n; j++) {
+			s.palettes[i].colours[j].r = static_cast<float>(j) / static_cast<float>(n - 1);
+			s.palettes[i].colours[j].g = static_cast<float>(i) / 15.0f;
+			s.palettes[i].colours[j].b = 1.0f - static_cast<float>(j) / static_cast<float>(n - 1);
+		}
+	}
+	char *out = pd_set_write(&s);
+	REQUIRE(out != nullptr);
+	struct pl_set s2;
+	char err[256] = {0};
+	REQUIRE_MESSAGE(pd_set_parse(out, &s2, err, sizeof(err)), err);
+	CHECK(s2.n_palettes == 16);
+	for (int i = 0; i < 16; i++) {
+		CHECK(s2.palettes[i].n_colours == 5 + (i % 4));
+		CHECK(s2.palettes[i].mode == PL_MODE_GRADIENT);
+		char h[PL_HEX_LEN], h2[PL_HEX_LEN];
+		pl_colour_to_hex(s.palettes[i].colours[0], h);
+		pl_colour_to_hex(s2.palettes[i].colours[0], h2);
+		CHECK(std::strcmp(h, h2) == 0);
+	}
+	char *out2 = pd_set_write(&s2);
+	REQUIRE(out2 != nullptr);
+	CHECK(std::string(out2) == std::string(out));
+	pd_set_free(out);
+	pd_set_free(out2);
+}

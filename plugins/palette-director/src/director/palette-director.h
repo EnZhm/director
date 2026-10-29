@@ -1,8 +1,39 @@
+/*
+Palette Director
+Copyright (C) 2026 EnZhm
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along
+with this program. If not, see <https://www.gnu.org/licenses/>
+*/
+
 #pragma once
+
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
+
+// The Palette Director 2.0.0 follower core: pure C++17, no libobs/Qt.
+//
+// Music Director is the suite's clock. Palette Director reads it ~every 5 ms
+// (director_clock_read(), include/director-clock.h), runs the sample through
+// director_follow::Follower (common/director-follow.h) and, on each edge, drives
+// pd::Scheduler in Palette Director 1.2.0's order: section, then phrase, then beat,
+// then on_tick(beats_now) every poll. advance_pfade() runs once per time step.
+//
+// The core keeps an event log identical to PD 1.2.0's Director for the same
+// section / phrase / beat / tick sequence, so the cross-plugin audit can link it with
+// Music Director's core and compare against the 1.2.0 golden.
 
 #include "command_queue.h"
 #include "palette.h"
@@ -13,9 +44,6 @@ namespace pd {
 enum class Section { Groove, Breakdown, Drop };
 enum class ChangeTrigger { Drop, Phrases, Random, Manual };
 enum class ChangeOrder { Sequence, Shuffle };
-
-// v1.2 Music dock: how far one Nudge back / forward shifts the beat phase, in beats.
-constexpr double kNudgeStepBeats = 0.05;
 
 // ---- Config structs (spec 4.2) ----
 struct ColourSettings {
@@ -50,9 +78,9 @@ struct DirectorConfig {
 	uint32_t seed = 7;
 	// Added beyond spec 4.2 (present in the set schema 5.1 and properties 3.4):
 	bool enabled = true;
-	// v1.0.1 audio sensitivity (set-file keys optional on load; defaults = v1.0.0 behaviour)
-	float input_gain_db = 0.0f;    // -12..+24 dB, applied to the mono downmix before analysis
-	float kick_sensitivity = 0.6f; // 0..1 (shown 0-100%); see kick_threshold_for()
+	// Retired audio keys (spec 4.1): PD no longer uses them but preserves them verbatim.
+	float input_gain_db = 0.0f;
+	float kick_sensitivity = 0.6f;
 	// v1.0.1 drop colour cycle (lock behaviour): on a drop after a breakdown, maybe hard-cut through
 	// the normal palettes for a few bars, then land on the palette the drop would have picked.
 	bool drop_cycle = false;           // set-file key missing = disabled (old files unchanged)
@@ -60,16 +88,6 @@ struct DirectorConfig {
 	int drop_cycle_bars = 1;           // 1..4
 	int drop_cycle_steps_per_beat = 2; // 1 ("1/4"), 2 ("1/8"), 4 ("1/16")
 };
-
-// v1.0.1: kick threshold as a fraction of the adaptive bass reference.
-// sensitivity 0 -> 0.85, 0.6 (default) -> 0.40 (= v1.0.0's fixed 0.4), 1 -> 0.10. Higher = more sensitive.
-inline float kick_threshold_for(float sensitivity)
-{
-	const float s = sensitivity < 0.0f ? 0.0f : (sensitivity > 1.0f ? 1.0f : sensitivity);
-	return 0.85f - 0.75f * s;
-}
-// v1.0.1: input gain in dB (clamped to -12..+24) -> linear amplitude factor.
-float input_gain_linear(float db);
 
 struct SetFile {
 	std::string name;
@@ -95,7 +113,7 @@ struct DirectorState {
 	float pfade = 1.0f;    // 0..1 crossfade progress
 	int cooldown_phrases_left = 0;
 	bool lock_on = true;
-	// Added for the filter + dock (P4/P5); not in spec 4.2 but derived from the same state.
+	// Derived from the same state (filter + dock).
 	float beat_frac = 0.0f; // fractional part of the beat clock (beat lights)
 	int next_palette = -1;  // pickNextPreview: next palette the scheduler would pick, -1 if none
 	bool paused = false;    // director paused (Pause / Panic)
@@ -103,18 +121,19 @@ struct DirectorState {
 	bool forced_on = false; // Force on toggle
 	bool force_off = false; // Force off (hold)
 	bool enabled = true;    // DirectorConfig::enabled
-	bool silent = true;     // feed is silent (fallback BPM in use)
-	// v1.0.1 audio meter (dock): all after the input gain
-	float input_db = -120.0f;    // peak level, dBFS (fast attack, ~300 ms fall)
-	bool clip = false;           // peak above -1 dBFS within the last ~1.5 s
-	float bass_level = 0.0f;     // bass envelope / adaptive reference (0..1)
-	float kick_threshold = 0.4f; // the kick threshold on the same scale (marker on the bass bar)
-	uint32_t kicks = 0;          // detected kick count (the dock flashes its kick light on change)
-	bool drop_cycle = false;     // v1.0.1: a drop colour cycle is running (lock held on)
-	bool bpm_locked = false;     // v1.2: tempo held (Lock BPM or a tap); the dock button follows it
+	bool silent = true;     // clock feed silent (fallback BPM in use)
+	// Audio meter fields are retired (spec 4.1); they keep their defaults so the dock still
+	// compiles. Nothing feeds them any more.
+	float input_db = -120.0f;
+	bool clip = false;
+	float bass_level = 0.0f;
+	float kick_threshold = 0.4f;
+	uint32_t kicks = 0;
+	bool drop_cycle = false; // a drop colour cycle is running (lock held on)
+	bool bpm_locked = false; // retired with the Music dock; kept for the struct shape
 };
 
-// ---- Director decision log (feeds the dock log in P5 and the offline tests) ----
+// ---- Director decision log (feeds the dock log and the offline tests) ----
 struct Event {
 	enum class Type { SectionChange, PaletteChange, LockOff, LockOn, Command };
 	Type type = Type::Command;
@@ -126,38 +145,55 @@ struct Event {
 	std::string detail;                // human-readable reason
 };
 
-class Scheduler; // forward declaration (implementation detail, lives in scheduler.h/.cpp)
+// One clock sample (a subset of struct director_clock, include/director-clock.h). Filled by the
+// worker from director_clock_read(), or by a scripted sequence in tests. Pure, no libobs.
+struct ClockSample {
+	bool ok = false;
+	int64_t beat = 0;
+	int64_t phrase = 0;
+	int phrase_beats = 32;
+	int section = 0; // DIRECTOR_CLOCK_SECTION_*
+	int64_t section_seq = 0;
+	int64_t section_beat = 0;
+	int64_t epoch = 0;
+	double beats_now = 0.0; // beat position extrapolated to the call time (drives on_tick)
+	double bpm = 0.0;       // fallback tempo the grid runs at
+	double confidence = 0.0;
+	double bass = 0.0; // 0..1 bass envelope (breathing)
+	bool silent = true;
+	bool paused = false;
+	int64_t now_ns = 0; // os_gettime_ns() at the call (advance_pfade time step)
+};
 
-// The Director library core. Pure C++17, no libobs/Qt.
-//
-// Threading contract (used by P4): push_audio runs on the audio/WAV thread and drains
-// the command queue; snapshot() is safe on the render thread (it reads a plain struct
-// copy); push_command is safe from the UI thread (SPSC queue).
-class Director {
+class Scheduler; // implementation detail (scheduler.h/.cpp)
+
+// The Palette Director follower core. Pure C++17, no libobs/Qt.
+class PaletteDirector {
 public:
-	explicit Director(const SetFile &);
-	~Director();
-	Director(Director &&) noexcept;
-	Director &operator=(Director &&) noexcept;
-	Director(const Director &) = delete;
-	Director &operator=(const Director &) = delete;
+	explicit PaletteDirector(const SetFile &);
+	~PaletteDirector();
+	PaletteDirector(PaletteDirector &&) noexcept;
+	PaletteDirector &operator=(PaletteDirector &&) noexcept;
+	PaletteDirector(const PaletteDirector &) = delete;
+	PaletteDirector &operator=(const PaletteDirector &) = delete;
 
-	void push_audio(const float *mono, std::size_t frames, uint32_t sample_rate);
+	// Feed one clock sample. Safe to call from the worker thread ~every 5 ms.
+	void on_clock(const ClockSample &);
 	DirectorState snapshot() const;
 	void push_command(Command cmd, int palette_index = -1);
 	void apply_set(const SetFile &);
 	const std::vector<Event> &events() const;
 
-	// P4 additions (filter host). update_set re-configures a running Director without
-	// resetting the beat clock / analysis; live_palette >= 0 also sets the live palette
-	// (used when the filter restores a saved live palette or the palette list changes).
+	// update_set re-configures a running Director without resetting the clock.
+	// live_palette >= 0 also sets the live palette (filter restores a saved live palette).
 	void update_set(const SetFile &, int live_palette = -1);
 	// Moves the events produced since the last call into `out` (appended).
 	void drain_events(std::vector<Event> &out);
 	// When false, events() keeps no history (long-running host; use drain_events).
 	void set_keep_history(bool keep);
-	// v1.0.1: forget the adaptive bass reference + meters (call when the audio source changes).
-	void reset_audio_reference();
+
+	// true while Music Director is being followed (director_clock_read() succeeded recently).
+	bool following() const;
 
 private:
 	struct Impl;
