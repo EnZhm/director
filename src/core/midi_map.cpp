@@ -1,4 +1,4 @@
-// Clip Director core: MIDI -> hotkey mapping (W4 "MIDI Director"). See midi_map.h for the model.
+// Scene Director core: MIDI -> hotkey mapping (the "MIDI Director" dock). See midi_map.h for the model.
 #include "midi_map.h"
 
 #include <cmath>
