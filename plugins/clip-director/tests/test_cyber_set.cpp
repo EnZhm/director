@@ -50,12 +50,24 @@ TEST_CASE("cyber library: 2-hour simulated set")
 	std::vector<int> picks;
 	int cuts = 0, inverted = 0, nothing = 0;
 	const double per_frame = 128.0 / 60.0 / 30.0; // 30 fps is enough for scheduling
+	Section last_sec = Section::Groove;
+	int64_t seq = 0, sb = 0;
+	bool started = false;
 	for (double b = 0; b < 128.0 * 120; b += per_frame) {
+		const Section cur = section(b);
+		if (!started || cur != last_sec) { // Music Director bumps section_seq on every change
+			started = true;
+			last_sec = cur;
+			seq++;
+			sb = (int64_t)std::floor(b);
+		}
 		ClockSample c;
 		c.valid = true;
 		c.beats = b;
 		c.bpm = 128.0;
-		c.section = section(b);
+		c.section = cur;
+		c.section_seq = seq;
+		c.section_beat = sb;
 		for (const auto &e : sched.tick(c)) {
 			if (e.type == SchedEvent::Type::Prepare) {
 				const Pick p = picker.next(e.section, e.hold_s);
