@@ -252,6 +252,98 @@ TEST_CASE("#FF00A0 round-trips exactly through the obs int and hex helpers")
 	CHECK(strcmp(out, hex) == 0);
 }
 
+/* ---- Render guards (spec 4.2) ---- */
+
+TEST_CASE("pl_sanitize_for_render falls back to a built-in palette for an empty set")
+{
+	struct pl_set s;
+	pl_set_init(&s);
+	s.n_palettes = 0;
+	int live = 0, prev = -1;
+	const int fix = pl_sanitize_for_render(&s, &live, &prev);
+	CHECK((fix & PL_FIX_EMPTY_SET) != 0);
+	CHECK(s.n_palettes == 1);
+	CHECK(s.palettes[0].n_colours >= 2);
+	CHECK(s.palettes[0].name[0] != '\0');
+	CHECK(live == 0);
+}
+
+TEST_CASE("pl_sanitize_for_render clamps n_colours outside [1, PL_MAX_COLOURS]")
+{
+	struct pl_set s;
+	pl_set_default(&s);
+	s.palettes[0].n_colours = 0;
+	int live = 0, prev = -1;
+	int fix = pl_sanitize_for_render(&s, &live, &prev);
+	CHECK((fix & PL_FIX_N_COLOURS) != 0);
+	CHECK(s.palettes[0].n_colours == 1);
+
+	s.palettes[0].n_colours = 99;
+	fix = pl_sanitize_for_render(&s, &live, &prev);
+	CHECK((fix & PL_FIX_N_COLOURS) != 0);
+	CHECK(s.palettes[0].n_colours == PL_MAX_COLOURS);
+}
+
+TEST_CASE("pl_sanitize_for_render maps an unknown mode to gradient_map")
+{
+	struct pl_set s;
+	pl_set_default(&s);
+	s.palettes[0].mode = 7;
+	int live = 0, prev = -1;
+	const int fix = pl_sanitize_for_render(&s, &live, &prev);
+	CHECK((fix & PL_FIX_MODE) != 0);
+	CHECK(s.palettes[0].mode == PL_MODE_GRADIENT);
+}
+
+TEST_CASE("pl_sanitize_for_render clamps live and drops an out-of-range prev")
+{
+	struct pl_set s;
+	int live = -1;
+	struct pl_set three = make_three(&live); // 3 palettes
+	s = three;
+	int l = 5, p = 7;
+	int fix = pl_sanitize_for_render(&s, &l, &p);
+	CHECK((fix & PL_FIX_LIVE) != 0);
+	CHECK(l == 2);
+	CHECK((fix & PL_FIX_PREV) != 0);
+	CHECK(p == -1);
+
+	l = -3;
+	p = -2;
+	pl_sanitize_for_render(&s, &l, &p);
+	CHECK(l == 0);
+	CHECK(p == -1);
+
+	/* a valid prev (including -1 = none) is left alone */
+	l = 1;
+	p = 0;
+	CHECK(pl_sanitize_for_render(&s, &l, &p) == PL_FIX_NONE);
+	CHECK(l == 1);
+	CHECK(p == 0);
+}
+
+TEST_CASE("pl_sanitize_for_render is a no-op for a valid spectrum set")
+{
+	/* 16 palettes, 5..8 colours (the spectrum shape the set designer uses) */
+	struct pl_set s;
+	pl_set_init(&s);
+	s.n_palettes = 16;
+	for (int i = 0; i < 16; i++) {
+		pl_palette_default(&s.palettes[i], "");
+		snprintf(s.palettes[i].name, sizeof(s.palettes[i].name), "S%02d", i);
+		s.palettes[i].mode = (i % 4 == 0) ? PL_MODE_DUOTONE : PL_MODE_GRADIENT;
+		s.palettes[i].n_colours = 5 + (i % 4); // 5..8
+	}
+	struct pl_set before;
+	memcpy(&before, &s, sizeof(before));
+	int live = 15, prev = 3;
+	const int fix = pl_sanitize_for_render(&s, &live, &prev);
+	CHECK(fix == PL_FIX_NONE);
+	CHECK(memcmp(&before, &s, sizeof(s)) == 0);
+	CHECK(live == 15);
+	CHECK(prev == 3);
+}
+
 TEST_CASE("coverage: breathing only dips below coverage, and is off while silent")
 {
 	// coverage 1, breathing 0.5, lock on, silent feed: pure palette (amt 1)

@@ -51,14 +51,6 @@ enum pd_cmd {
 	PD_CMD_ROTATE_NOW,
 	PD_CMD_PANIC,
 	PD_CMD_TOGGLE_PAUSE, /* host-level: Pause or Resume from the current state */
-	/* v1.2 Music dock clock commands */
-	PD_CMD_PHRASE_NOW,      /* re-anchor the phrase/bar grid so this beat is a phrase downbeat */
-	PD_CMD_DROP_NOW,        /* force section DROP on the next beat */
-	PD_CMD_FORCE_BREAKDOWN, /* force section BREAKDOWN on the next beat */
-	PD_CMD_TAP_TEMPO,       /* BPM from tap times */
-	PD_CMD_LOCK_BPM,        /* toggle: freeze tempo tracking */
-	PD_CMD_NUDGE_BACK,      /* shift the beat phase back a small step */
-	PD_CMD_NUDGE_FWD,       /* shift the beat phase forward a small step */
 };
 
 /* where a command came from (selects the producer queue + log tag) */
@@ -86,10 +78,9 @@ void pd_host_destroy(struct pd_host *h);
 /* Push new settings (create, then the video thread from update). Returns the palette-layout
  * generation, which only changes when palette count/names/order change.
  * force_live >= 0 sets the Director's live palette. */
-unsigned long long pd_host_update(struct pd_host *h, const struct pl_set *set, int force_live,
-				  const char *audio_source);
+unsigned long long pd_host_update(struct pd_host *h, const struct pl_set *set, int force_live);
 
-/* filter_add / filter_remove: detach the audio callback while the filter is removed */
+/* filter_add / filter_remove: kept so the worker can log attach/detach of the filter */
 void pd_host_set_attached(struct pd_host *h, bool attached);
 
 void pd_host_command(struct pd_host *h, int cmd, int idx, int origin);

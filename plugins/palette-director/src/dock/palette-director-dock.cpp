@@ -27,7 +27,7 @@ remembered in the dock's own config file (plugin_config/palette-director/dock.js
 Threading: everything here runs on the UI thread.
   - Live view: a ~30 Hz QTimer polls pdhost::read_view (copy under the host's view mutex).
   - Commands (go live, next, panic, ...): pdhost::command -> host command queue -> worker.
-  - Edits: palette_lock_commit / palette_lock_set_audio / palette_lock_set_action write the
+  - Edits: palette_lock_commit / palette_lock_set_action write the
     filter's settings and call obs_source_update, exactly the path the properties window
     uses; the filter then pushes the set into the Director. No new cross-thread paths.
 Closing the dock only stops the poll timer; the Director keeps running.
@@ -347,9 +347,13 @@ protected:
 		secChip = new QLabel(live_area);
 		lockChip = new QLabel(live_area);
 		stateChip = new QLabel(live_area);
+		/* read-only clock status from Music Director (spec 4) */
+		clockStatus = new QLabel(live_area);
+		clockStatus->setForegroundRole(QPalette::PlaceholderText);
 		statusRow->addWidget(secChip);
 		statusRow->addWidget(lockChip);
 		statusRow->addWidget(stateChip);
+		statusRow->addWidget(clockStatus);
 		statusRow->addStretch(1);
 		lv->addLayout(statusRow);
 
@@ -1606,6 +1610,16 @@ private:
 		const pd::DirectorState &st = view.st;
 		const struct pl_set &set = view.set;
 
+		/* read-only clock status from Music Director (spec 4) */
+		if (view.md_found) {
+			static const char *csec[3] = {"GROOVE", "BREAKDOWN", "DROP"};
+			clockStatus->setText(QString("clock %1 BPM %2")
+						     .arg(view.clk_bpm, 0, 'f', 1)
+						     .arg(csec[std::clamp(view.clk_section, 0, 2)]));
+		} else {
+			clockStatus->setText(QStringLiteral("Waiting for Music Director"));
+		}
+
 		static const char *secName[3] = {"GROOVE", "BREAKDOWN", "DROP"};
 		static const QColor secCol[3] = {QColor(80, 140, 255), QColor(255, 170, 40), QColor(255, 60, 100)};
 		const int si = std::clamp(static_cast<int>(st.section), 0, 2);
@@ -1727,7 +1741,7 @@ private:
 	/* widgets */
 	QWidget *body = nullptr, *live_area = nullptr;
 	QComboBox *picker = nullptr;
-	QLabel *secChip = nullptr, *lockChip = nullptr, *stateChip = nullptr;
+	QLabel *secChip = nullptr, *lockChip = nullptr, *stateChip = nullptr, *clockStatus = nullptr;
 	QLabel *statusText = nullptr, *empty = nullptr, *nowLbl = nullptr;
 	QGridLayout *padGrid = nullptr;
 	PadWidget *pads[PL_MAX_PALETTES] = {};

@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-#include "director.h"
+#include "palette-director.h"
 #include "rng.h"
 
 namespace pd {

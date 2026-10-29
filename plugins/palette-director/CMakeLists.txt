@@ -51,16 +51,18 @@ target_sources(
     src/sets/set-file.cpp
     src/sets/set-store.cpp
     src/ui/pd-ui.cpp
-    src/director/director.cpp
-    src/director/analysis.cpp
-    src/director/beat_tracker.cpp
-    src/director/section_state.cpp
+    src/director/palette-director.cpp
     src/director/scheduler.cpp
     src/dock/dock-widgets.cpp
     src/dock/palette-director-dock.cpp
-    src/dock/music-dock.cpp
 )
-target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE src)
+target_include_directories(
+  ${CMAKE_PROJECT_NAME}
+  PRIVATE
+    src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../common
+)
 
 if(HAVE_FRONTEND_API)
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ENABLE_FRONTEND_API)

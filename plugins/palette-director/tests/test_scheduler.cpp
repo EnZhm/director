@@ -5,10 +5,14 @@
 #include <string>
 #include <vector>
 
-#include "director.h"
+#include "palette-director.h"
 #include "test_helpers.h"
 
 using namespace pdtest;
+
+// The palette scheduler driven by scripted clock samples (spec 7). Palette Director is a
+// follower: the same section/phrase/beat sequence PD 1.2.0's Director saw is replayed here
+// through pd::PaletteDirector::on_clock().
 
 TEST_CASE("random off at chance 1.0 fires on the next phrase and respects cooldown")
 {
@@ -19,9 +23,8 @@ TEST_CASE("random off at chance 1.0 fires on the next phrase and respects cooldo
 	s.director.random_bars_min = 1;
 	s.director.random_bars_max = 1; // deterministic 1-bar off
 	s.director.cooldown_phrases = 2;
-	pd::Director d(s);
-	const WavMono w = pdtest::gen_kick(128.0, 40); // 160 beats -> phrase boundaries at 32,64,96,128
-	pdtest::feed_roundtrip(d, w, pdtest::fixture_dir(), "random-off.wav");
+	pd::PaletteDirector d(s);
+	pdtest::run(d, pdtest::script(160, 32)); // phrase boundaries at 32, 64, 96, 128
 
 	const auto offs = pdtest::lock_offs(d.events());
 	const auto ons = pdtest::lock_ons(d.events());
@@ -38,7 +41,6 @@ TEST_CASE("random off at chance 1.0 fires on the next phrase and respects cooldo
 	CHECK(off_beats == std::vector<uint64_t>({32, 128}));
 	CHECK(on_beats == std::vector<uint64_t>({36, 132}));
 
-	// lock held on throughout otherwise
 	CHECK(d.snapshot().lock_on == true);
 }
 
@@ -52,11 +54,8 @@ TEST_CASE("shuffle plays every normal palette once before any repeat; breakdown 
 	s.director.phrase_beats = 32;
 	s.director.random_off = false;
 	s.director.seed = 7;
-	pd::Director d(s);
-	// 64 bars = 256 beats -> phrase boundaries at 32..224 = 7 palette changes (2+ full
-	// rotations of 3), enough to catch a repeat within any window of N normal palettes.
-	const WavMono w = pdtest::gen_kick(128.0, 64);
-	pdtest::feed_roundtrip(d, w, pdtest::fixture_dir(), "shuffle.wav");
+	pd::PaletteDirector d(s);
+	pdtest::run(d, pdtest::script(256, 32)); // 8 phrase boundaries = 8 palette changes
 
 	const auto pcs = pdtest::palette_changes(d.events());
 	REQUIRE(pcs.size() >= 2 * kNormal);
@@ -65,12 +64,9 @@ TEST_CASE("shuffle plays every normal palette once before any repeat; breakdown 
 	for (const auto &e : pcs)
 		seq.push_back(e.palette);
 
-	// breakdown palette (index 3) never enters the rotation
 	for (int v : seq)
 		CHECK(v != 3);
 
-	// no repeat within any window of N normal palettes (spec 4.2 + design doc test 7):
-	// every N consecutive changes must be a full permutation of the normal pool.
 	for (std::size_t i = 0; i + kNormal <= seq.size(); ++i) {
 		std::vector<int> window(seq.begin() + static_cast<std::ptrdiff_t>(i),
 					seq.begin() + static_cast<std::ptrdiff_t>(i + kNormal));
@@ -89,13 +85,15 @@ TEST_CASE("breakdown palette goes live on BREAKDOWN; next normal on DROP")
 	s.palette_changes.crossfade_beats = 2.0f;
 	s.director.off_on_breakdown = false;
 	s.director.random_off = false;
-	pd::Director d(s);
-	const WavMono w = pdtest::gen_breakdown(128.0, 8, 4, 4); // breakdown@32, drop@48
-	pdtest::feed_roundtrip(d, w, pdtest::fixture_dir(), "bd-palette.wav");
+	pd::PaletteDirector d(s);
+	// groove 8 bars -> breakdown 4 bars -> drop 8 bars; the drop lands on beat 48
+	pdtest::run(d, pdtest::script(56, 32, {{0, 0}, {32, 1}, {48, 2}}));
 
 	const auto evs = d.events();
 	const int64_t bd = pdtest::section_beat(evs, pd::Section::Breakdown);
 	const int64_t dp = pdtest::section_beat(evs, pd::Section::Drop);
+	CHECK(bd == 32);
+	CHECK(dp == 48);
 
 	const auto pcs = pdtest::palette_changes(evs);
 	bool saw_breakdown_live = false;
@@ -106,10 +104,9 @@ TEST_CASE("breakdown palette goes live on BREAKDOWN; next normal on DROP")
 		if (e.palette == 1 && std::llabs(static_cast<int64_t>(e.beat) - dp) <= 2)
 			saw_next_normal = true;
 	}
-	CHECK(saw_breakdown_live); // breakdown palette live within 2 beats of BREAKDOWN
-	CHECK(saw_next_normal);    // next normal palette (1, sequence from 0) on the DROP
+	CHECK(saw_breakdown_live);
+	CHECK(saw_next_normal);
 
-	// crossfade finishes within the configured beats
 	CHECK(d.snapshot().pfade == doctest::Approx(1.0f).epsilon(0.001f));
 	CHECK(d.snapshot().live_palette == 1);
 }
@@ -122,9 +119,8 @@ TEST_CASE("trigger: Every N phrases changes in list order")
 	s.palette_changes.order = pd::ChangeOrder::Sequence;
 	s.director.phrase_beats = 32;
 	s.director.random_off = false;
-	pd::Director d(s);
-	const WavMono w = pdtest::gen_kick(128.0, 40);
-	pdtest::feed_roundtrip(d, w, pdtest::fixture_dir(), "every-n.wav");
+	pd::PaletteDirector d(s);
+	pdtest::run(d, pdtest::script(160, 32));
 
 	const auto pcs = pdtest::palette_changes(d.events());
 	REQUIRE(pcs.size() == 2);
@@ -142,9 +138,8 @@ TEST_CASE("trigger: Random per phrase (chance 1.0) changes every phrase")
 	s.palette_changes.order = pd::ChangeOrder::Sequence;
 	s.director.phrase_beats = 32;
 	s.director.random_off = false;
-	pd::Director d(s);
-	const WavMono w = pdtest::gen_kick(128.0, 40);
-	pdtest::feed_roundtrip(d, w, pdtest::fixture_dir(), "random-trig.wav");
+	pd::PaletteDirector d(s);
+	pdtest::run(d, pdtest::script(160, 32));
 
 	const auto pcs = pdtest::palette_changes(d.events());
 	REQUIRE(pcs.size() == 5); // boundaries at 32, 64, 96, 128, 160
@@ -162,15 +157,13 @@ TEST_CASE("trigger: Drop changes only on drops")
 	s.palette_changes.trigger = pd::ChangeTrigger::Drop;
 	s.palette_changes.order = pd::ChangeOrder::Sequence;
 	s.director.random_off = false;
-	pd::Director d(s);
-	const WavMono w = pdtest::gen_breakdown(128.0, 8, 4, 4);
-	pdtest::feed_roundtrip(d, w, pdtest::fixture_dir(), "drop-trig.wav");
+	pd::PaletteDirector d(s);
+	pdtest::run(d, pdtest::script(56, 32, {{0, 0}, {32, 1}, {48, 2}}));
 
 	const auto pcs = pdtest::palette_changes(d.events());
 	REQUIRE(pcs.size() == 1);
 	CHECK(pcs[0].palette == 1);
-	CHECK(pcs[0].beat >= 47);
-	CHECK(pcs[0].beat <= 49);
+	CHECK(pcs[0].beat == 48);
 }
 
 TEST_CASE("trigger: Manual makes no automatic changes")
@@ -178,14 +171,14 @@ TEST_CASE("trigger: Manual makes no automatic changes")
 	pd::SetFile s = pdtest::make_set(3);
 	s.palette_changes.trigger = pd::ChangeTrigger::Manual;
 	s.director.random_off = false;
-	pd::Director d(s);
-	const WavMono w = pdtest::gen_kick(128.0, 40);
-	pdtest::feed_roundtrip(d, w, pdtest::fixture_dir(), "manual.wav");
+	pd::PaletteDirector d(s);
+	const auto samples = pdtest::script(40, 32);
+	pdtest::run(d, samples);
 
 	CHECK(pdtest::palette_changes(d.events()).empty());
 
 	d.push_command(pd::Command::GoLive, 2);
-	pdtest::feed(d, std::vector<float>(4410, 0.0f), 44100); // drain
+	pdtest::run(d, samples); // drain
 	CHECK(d.snapshot().live_palette == 2);
 }
 
@@ -199,10 +192,8 @@ TEST_CASE("16-palette set: shuffle plays all 15 normal palettes before any repea
 	s.director.phrase_beats = 16;
 	s.director.random_off = false;
 	s.director.seed = 2077;
-	pd::Director d(s);
-	// 136 bars = 544 beats -> 33 phrase boundaries (16-beat phrases) = 2+ full passes of 15
-	const WavMono w = pdtest::gen_kick(128.0, 136);
-	pdtest::feed(d, w.to_float(), w.sample_rate);
+	pd::PaletteDirector d(s);
+	pdtest::run(d, pdtest::script(544, 16)); // 34 phrases -> 34 changes
 
 	const auto pcs = pdtest::palette_changes(d.events());
 	REQUIRE(pcs.size() >= 2 * kNormal);

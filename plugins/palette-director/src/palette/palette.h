@@ -142,6 +142,27 @@ float pl_lock_amount(float coverage, float breathing, float bass, float lock_mix
 /* index of the breakdown palette (resolved by name), -1 = none */
 int pl_breakdown_index(const struct pl_set *s);
 
+/* ---- Render guards (spec 4.2) ----
+ * pl_sanitize_for_render() is a pure function (no libobs). It normalises a set + the live/prev
+ * indices the render path is about to use:
+ *   - an empty palette set -> a built-in fallback palette (n_palettes 1, "Palette 1");
+ *   - live out of range -> clamped into [0, n_palettes-1];
+ *   - prev out of range (>= n_palettes or < -1) -> -1 (no crossfade from a stale slot);
+ *   - n_colours outside [1, PL_MAX_COLOURS] -> clamped;
+ *   - an unknown mode -> PL_MODE_GRADIENT.
+ * It returns a bitmask of the causes it fixed (enum pl_fix). Same normalisation runs on set load.
+ * A spectrum set that is already valid returns PL_FIX_NONE and mutates nothing.
+ */
+enum pl_fix {
+	PL_FIX_NONE = 0,
+	PL_FIX_EMPTY_SET = 1 << 0,
+	PL_FIX_LIVE = 1 << 1,
+	PL_FIX_PREV = 1 << 2,
+	PL_FIX_N_COLOURS = 1 << 3,
+	PL_FIX_MODE = 1 << 4,
+};
+int pl_sanitize_for_render(struct pl_set *s, int *live, int *prev);
+
 void pl_set_init(struct pl_set *s);
 void pl_set_default(struct pl_set *s);
 void pl_palette_default(struct pl_palette *p, const char *name);

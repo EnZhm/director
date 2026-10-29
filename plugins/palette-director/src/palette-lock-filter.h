@@ -35,9 +35,6 @@ struct pl_set;
 bool palette_lock_read_set(obs_source_t *src, struct pl_set *out, int *edit, int *live);
 /* apply a modified set; force_live >= 0 re-syncs the Director's live palette (indices changed) */
 bool palette_lock_commit(obs_source_t *src, const struct pl_set *ns, int force_live, const char *why);
-/* audio source by name ("" = none / fixed BPM) */
-bool palette_lock_set_audio(obs_source_t *src, const char *name);
-const char *palette_lock_audio(obs_source_t *src); /* bfree() the result */
 /* set lifecycle: "set.new", "set.dup", "set.ren", "set.del", "set.save", "set.load" */
 bool palette_lock_set_action(obs_source_t *src, const char *action);
 /* switch to a stored set by name (asks first when the current set has unsaved changes) */

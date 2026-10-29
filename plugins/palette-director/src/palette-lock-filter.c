@@ -38,7 +38,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>/
 #define S_NCOLOURS "palette.%d.n_colours"
 #define S_COLOUR "palette.%d.colour.%d"
 
-#define PD_N_NAMED_HOTKEYS 14
+#define PD_N_NAMED_HOTKEYS 7
 
 struct palette_lock_filter {
 	obs_source_t *context;
@@ -67,6 +67,8 @@ struct palette_lock_filter {
 	struct pd_host *host;
 	obs_hotkey_id hk_named[PD_N_NAMED_HOTKEYS];
 	obs_hotkey_id hk_palette[PL_MAX_PALETTE_HOTKEYS];
+	/* render guards (spec 4.2): causes already warned about, once per filter per cause */
+	unsigned pl_fix_seen;
 };
 
 /* ------------------------------------------------------------------------- */
@@ -78,6 +80,20 @@ struct palette_lock_filter {
 #define SET_INT(s, k, v) (def ? obs_data_set_default_int(s, k, v) : obs_data_set_int(s, k, v))
 #define SET_DOUBLE(s, k, v) (def ? obs_data_set_default_double(s, k, v) : obs_data_set_double(s, k, v))
 #define SET_BOOL(s, k, v) (def ? obs_data_set_default_bool(s, k, v) : obs_data_set_bool(s, k, v))
+
+/* Retired keys (spec 4.1): PD no longer uses them but must never remove them, add them where
+ * absent, or rewrite them. They are written back only when the settings already carry a user
+ * value (read verbatim in set_from_settings), and never as defaults. */
+#define SET_RETIRED_INT(s, k, v)                                                                  \
+	do {                                                                                      \
+		if (!def && obs_data_has_user_value(s, k))                                        \
+			obs_data_set_int(s, k, v);                                                \
+	} while (0)
+#define SET_RETIRED_DOUBLE(s, k, v)                                                               \
+	do {                                                                                      \
+		if (!def && obs_data_has_user_value(s, k))                                        \
+			obs_data_set_double(s, k, v);                                             \
+	} while (0)
 
 static void write_set(obs_data_t *s, const struct pl_set *set, bool def)
 {
@@ -100,9 +116,9 @@ static void write_set(obs_data_t *s, const struct pl_set *set, bool def)
 	SET_STRING(s, "breakdown_palette", set->breakdown);
 
 	SET_BOOL(s, "dir_enabled", set->dir_enabled);
-	SET_INT(s, "phrase_beats", set->phrase_beats);
+	SET_RETIRED_INT(s, "phrase_beats", set->phrase_beats);
 	SET_DOUBLE(s, "lock_fade_beats", set->lock_fade_beats);
-	SET_DOUBLE(s, "fallback_bpm", set->fallback_bpm);
+	SET_RETIRED_DOUBLE(s, "fallback_bpm", set->fallback_bpm);
 	SET_BOOL(s, "random_off", set->random_off);
 	SET_DOUBLE(s, "random_chance", set->random_chance);
 	SET_INT(s, "bars_min", set->bars_min);
@@ -114,8 +130,8 @@ static void write_set(obs_data_t *s, const struct pl_set *set, bool def)
 	SET_DOUBLE(s, "breathing", set->breathing);
 	SET_BOOL(s, "rotation", set->rotation);
 	SET_INT(s, "seed", (long long)set->seed);
-	SET_DOUBLE(s, "input_gain_db", set->input_gain_db);
-	SET_DOUBLE(s, "kick_sensitivity", set->kick_sensitivity);
+	SET_RETIRED_DOUBLE(s, "input_gain_db", set->input_gain_db);
+	SET_RETIRED_DOUBLE(s, "kick_sensitivity", set->kick_sensitivity);
 	SET_BOOL(s, "drop_cycle", set->drop_cycle);
 	SET_DOUBLE(s, "drop_cycle_chance", set->drop_cycle_chance);
 	SET_INT(s, "drop_cycle_bars", set->drop_cycle_bars);
@@ -141,6 +157,8 @@ static void write_set(obs_data_t *s, const struct pl_set *set, bool def)
 #undef SET_INT
 #undef SET_DOUBLE
 #undef SET_BOOL
+#undef SET_RETIRED_INT
+#undef SET_RETIRED_DOUBLE
 
 static void settings_from_set(obs_data_t *s, const struct pl_set *set)
 {
@@ -230,6 +248,10 @@ static void set_from_settings(obs_data_t *s, struct pl_set *set)
 			p->colours[j] = pl_colour_from_obs((unsigned)obs_data_get_int(s, key));
 		}
 	}
+
+	/* Render guards on load (spec 4.2): the same normalisation the render path runs. */
+	int live = 0, prev = -1;
+	pl_sanitize_for_render(set, &live, &prev);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -248,14 +270,6 @@ static const struct {
 	{"PaletteDirector.Panic", "HotkeyPanic", PD_CMD_PANIC, OBS_KEY_F17},
 	{"PaletteDirector.Next", "HotkeyNext", PD_CMD_NEXT, OBS_KEY_F18},
 	{"PaletteDirector.Prev", "HotkeyPrev", PD_CMD_PREV, OBS_KEY_F19},
-	/* v1.2 Music dock: stable names for name-based triggering (e.g. a MIDI front-end) */
-	{"pd_phrase_now", "HotkeyPhraseNow", PD_CMD_PHRASE_NOW, OBS_KEY_F20},
-	{"pd_drop_now", "HotkeyDropNow", PD_CMD_DROP_NOW, OBS_KEY_F21},
-	{"pd_force_breakdown", "HotkeyForceBreakdown", PD_CMD_FORCE_BREAKDOWN, OBS_KEY_F22},
-	{"pd_tap_tempo", "HotkeyTapTempo", PD_CMD_TAP_TEMPO, OBS_KEY_F23},
-	{"pd_lock_bpm", "HotkeyLockBpm", PD_CMD_LOCK_BPM, OBS_KEY_F24},
-	{"pd_nudge_back", "HotkeyNudgeBack", PD_CMD_NUDGE_BACK, OBS_KEY_F9},
-	{"pd_nudge_fwd", "HotkeyNudgeFwd", PD_CMD_NUDGE_FWD, OBS_KEY_F10},
 };
 
 static void hk_named(void *data, obs_hotkey_id id, obs_hotkey_t *hotkey, bool pressed)
@@ -383,29 +397,6 @@ static void unregister_hotkeys(struct palette_lock_filter *f)
 }
 
 /* ------------------------------------------------------------------------- */
-/* audio source default: a source named like "Mixer", else the first audio input */
-
-struct audio_pick {
-	char mixer[256];
-	char first[256];
-};
-
-static bool enum_audio_pick(void *param, obs_source_t *src)
-{
-	struct audio_pick *ap = param;
-	if ((obs_source_get_output_flags(src) & OBS_SOURCE_AUDIO) == 0)
-		return true;
-	const char *n = obs_source_get_name(src);
-	if (!n || !n[0])
-		return true;
-	if (!ap->first[0])
-		snprintf(ap->first, sizeof(ap->first), "%s", n);
-	if (!ap->mixer[0] && (strstr(n, "Mixer") || strstr(n, "mixer")))
-		snprintf(ap->mixer, sizeof(ap->mixer), "%s", n);
-	return true;
-}
-
-/* ------------------------------------------------------------------------- */
 /* source_info callbacks                                                      */
 
 static const char *palette_lock_get_name(void *unused)
@@ -421,7 +412,6 @@ static void palette_lock_defaults(obs_data_t *settings)
 	write_set(settings, &set, true);
 	obs_data_set_default_int(settings, "live_palette", 0);
 	obs_data_set_default_int(settings, "edit_palette", 0);
-	obs_data_set_default_string(settings, "audio_source", "");
 	obs_data_set_default_bool(settings, "show_advanced", false);
 }
 
@@ -434,7 +424,7 @@ static void push_to_host(struct palette_lock_filter *f, obs_data_t *settings)
 	f->live_setting = live_setting;
 	if (force >= f->set.n_palettes)
 		force = f->set.n_palettes - 1;
-	f->gen = pd_host_update(f->host, &f->set, (int)force, obs_data_get_string(settings, "audio_source"));
+	f->gen = pd_host_update(f->host, &f->set, (int)force);
 }
 
 static void palette_lock_update(void *data, obs_data_t *settings)
@@ -472,14 +462,6 @@ static void *palette_lock_create(obs_data_t *settings, obs_source_t *source)
 		f->hk_named[i] = OBS_INVALID_HOTKEY_ID;
 	for (int i = 0; i < PL_MAX_PALETTE_HOTKEYS; i++)
 		f->hk_palette[i] = OBS_INVALID_HOTKEY_ID;
-
-	if (!obs_data_has_user_value(settings, "audio_source")) {
-		struct audio_pick ap = {{0}, {0}};
-		obs_enum_sources(enum_audio_pick, &ap);
-		const char *pick = ap.mixer[0] ? ap.mixer : ap.first;
-		if (pick[0])
-			obs_data_set_string(settings, "audio_source", pick);
-	}
 
 	set_from_settings(settings, &f->set);
 	int edit = (int)obs_data_get_int(settings, "edit_palette");
@@ -522,8 +504,8 @@ static void *palette_lock_create(obs_data_t *settings, obs_source_t *source)
 		f->p_in_black = gs_effect_get_param_by_name(f->effect, "in_black");
 		f->p_in_white = gs_effect_get_param_by_name(f->effect, "in_white");
 		f->p_bsrc = gs_effect_get_param_by_name(f->effect, "bsrc");
-		blog(LOG_INFO, "[palette-lock] filter created: '%s', %d palette(s), live %d, audio '%s'", f->set.name,
-		     f->set.n_palettes, live, obs_data_get_string(settings, "audio_source"));
+		blog(LOG_INFO, "[palette-lock] filter created: '%s', %d palette(s), live %d", f->set.name,
+		     f->set.n_palettes, live);
 	}
 	bfree(effect_err);
 	bfree(effect_path);
@@ -589,17 +571,43 @@ static void palette_lock_render(void *data, gs_effect_t *unused)
 	struct pd_render_state rs = {0, 0, -1, 1.0f, 0, 1.0f, 0.0f, 1};
 	if (!pd_host_render_state(f->host, &rs))
 		rs.live = f->live_setting;
-	const int n = f->set.n_palettes;
-	if (rs.live < 0 || rs.live >= n)
-		rs.live = 0;
-	if (rs.gen != f->gen || rs.prev >= n)
-		rs.prev = -1; /* indices from an older palette list: no crossfade from a stale slot */
+
+	/* Render guards (spec 4.2): normalise the set + live/prev on a local copy and warn once per
+	 * filter per cause. Never draw nothing, never index out of range. */
+	struct pl_set set = f->set;
+	int live = rs.live, prev = rs.prev;
+	int fixed = pl_sanitize_for_render(&set, &live, &prev);
+	if (rs.gen != f->gen) {
+		prev = -1; /* indices from an older palette list: no crossfade from a stale slot */
+		fixed |= PL_FIX_PREV;
+	}
+	if (fixed != PL_FIX_NONE && (fixed & ~(int)f->pl_fix_seen)) {
+		const int newly = fixed & ~(int)f->pl_fix_seen;
+		if (newly & PL_FIX_EMPTY_SET)
+			blog(LOG_WARNING, "[palette-lock] '%s': empty palette set, using the built-in palette",
+			     obs_source_get_name(f->context));
+		if (newly & PL_FIX_LIVE)
+			blog(LOG_WARNING, "[palette-lock] '%s': live palette out of range, clamped",
+			     obs_source_get_name(f->context));
+		if (newly & PL_FIX_PREV)
+			blog(LOG_WARNING, "[palette-lock] '%s': prev palette out of range, dropped",
+			     obs_source_get_name(f->context));
+		if (newly & PL_FIX_N_COLOURS)
+			blog(LOG_WARNING, "[palette-lock] '%s': palette colour count out of range, clamped",
+			     obs_source_get_name(f->context));
+		if (newly & PL_FIX_MODE)
+			blog(LOG_WARNING, "[palette-lock] '%s': unknown palette mode, using gradient map",
+			     obs_source_get_name(f->context));
+		f->pl_fix_seen |= (unsigned)fixed;
+	}
+	rs.live = live;
+	rs.prev = prev;
 	if (rs.prev < 0)
 		rs.pfade = 1.0f;
 
 	/* A/B palettes, colours pre-rotated CPU-side (mock render(): A keeps its order while fading) */
-	struct pl_palette pb = f->set.palettes[rs.live];
-	struct pl_palette pa = rs.prev >= 0 ? f->set.palettes[rs.prev] : pb;
+	struct pl_palette pb = set.palettes[rs.live];
+	struct pl_palette pa = rs.prev >= 0 ? set.palettes[rs.prev] : pb;
 	pl_rotate_colours(&pb, rs.rotation);
 	if (rs.prev < 0 || rs.prev == rs.live)
 		pa = pb;
@@ -610,7 +618,7 @@ static void palette_lock_render(void *data, gs_effect_t *unused)
 	upload_palette(palB, &pb);
 
 	/* amt = coverage x breathing x lock_mix (mock: 1 - b + b*min(1, bass*1.2)) */
-	const float amt = pl_lock_amount(f->set.strength, f->set.breathing, rs.bass, rs.mix, rs.silent != 0);
+	const float amt = pl_lock_amount(set.strength, set.breathing, rs.bass, rs.mix, rs.silent != 0);
 
 	gs_effect_set_val(f->p_palA, palA, sizeof(palA));
 	gs_effect_set_val(f->p_palB, palB, sizeof(palB));
@@ -620,11 +628,11 @@ static void palette_lock_render(void *data, gs_effect_t *unused)
 	gs_effect_set_int(f->p_modeB, pb.mode);
 	gs_effect_set_float(f->p_pfade, rs.pfade);
 	gs_effect_set_float(f->p_amt, amt);
-	gs_effect_set_float(f->p_contrast, f->set.contrast);
-	gs_effect_set_float(f->p_preserve, f->set.preserve);
-	gs_effect_set_float(f->p_in_black, f->set.input_black);
-	gs_effect_set_float(f->p_in_white, f->set.input_white);
-	gs_effect_set_int(f->p_bsrc, f->set.brightness_source);
+	gs_effect_set_float(f->p_contrast, set.contrast);
+	gs_effect_set_float(f->p_preserve, set.preserve);
+	gs_effect_set_float(f->p_in_black, set.input_black);
+	gs_effect_set_float(f->p_in_white, set.input_white);
+	gs_effect_set_int(f->p_bsrc, set.brightness_source);
 
 	obs_source_process_filter_end(f->context, f->effect, 0, 0);
 }
@@ -1009,17 +1017,6 @@ static bool on_rename(void *priv, obs_properties_t *props, obs_property_t *prope
 	return true; /* refresh the list so it shows the (possibly reverted) name */
 }
 
-static bool enum_audio_list(void *param, obs_source_t *src)
-{
-	obs_property_t *list = param;
-	if ((obs_source_get_output_flags(src) & OBS_SOURCE_AUDIO) == 0)
-		return true;
-	const char *n = obs_source_get_name(src);
-	if (n && n[0])
-		obs_property_list_add_string(list, n, n);
-	return true;
-}
-
 static void add_look_properties(obs_properties_t *g, bool with_coverage)
 {
 	obs_property_t *p;
@@ -1122,10 +1119,6 @@ static obs_properties_t *palette_lock_properties(void *data)
 	bool listed = false;
 	add_set_selector(props, f, &n_sets, &listed);
 	obs_properties_add_button2(props, "set.load", obs_module_text("LoadFile"), btn_set_action, f);
-	obs_property_t *aud = obs_properties_add_list(props, "audio_source", obs_module_text("AudioSource"),
-						      OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(aud, obs_module_text("AudioSource.None"), "");
-	obs_enum_sources(enum_audio_list, aud);
 	obs_property_t *cov =
 		obs_properties_add_float_slider(props, "strength", obs_module_text("Coverage"), 0.0, 1.0, 0.01);
 	obs_property_set_long_description(cov, obs_module_text("Coverage.Help"));
@@ -1253,17 +1246,9 @@ static obs_properties_t *palette_lock_properties(void *data)
 	/* ---- Director ---- */
 	obs_properties_t *gdir = obs_properties_create();
 	obs_properties_add_bool(gdir, "dir_enabled", obs_module_text("Enabled"));
-	obs_properties_add_int(gdir, "fallback_bpm", obs_module_text("FallbackBpm"), 60, 200, 1);
-	obs_property_t *phr = obs_properties_add_list(gdir, "phrase_beats", obs_module_text("PhraseLength"),
-						      OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
-	obs_property_list_add_int(phr, "16 beats", 16);
-	obs_property_list_add_int(phr, "32 beats", 32);
+	/* Fallback BPM, phrase length, input gain and kick sensitivity moved to Music Director
+	 * (spec 4.1); the settings keys are preserved verbatim, only the controls are gone. */
 	obs_properties_add_float_slider(gdir, "lock_fade_beats", obs_module_text("LockFade"), 0.25, 8.0, 0.25);
-	b0 = obs_properties_add_float_slider(gdir, "input_gain_db", obs_module_text("InputGain"), -12.0, 24.0, 0.5);
-	obs_property_set_long_description(b0, obs_module_text("InputGain.Help"));
-	b0 = obs_properties_add_float_slider(gdir, "kick_sensitivity", obs_module_text("KickSensitivity"), 0.0, 1.0,
-					     0.01);
-	obs_property_set_long_description(b0, obs_module_text("KickSensitivity.Help"));
 	obs_properties_add_group(gadv, "director", obs_module_text("Director"), OBS_GROUP_NORMAL, gdir);
 
 	/* ---- Lock behaviours ---- */
@@ -1389,27 +1374,6 @@ bool palette_lock_commit(obs_source_t *src, const struct pl_set *ns, int force_l
 		blog(LOG_INFO, "[palette-lock] '%s': dock edit: %s", obs_source_get_name(src), why);
 	commit_set(f, ns, force_live, edit);
 	return true;
-}
-
-bool palette_lock_set_audio(obs_source_t *src, const char *name)
-{
-	if (!as_filter(src))
-		return false;
-	obs_data_t *s = obs_source_get_settings(src);
-	obs_data_set_string(s, "audio_source", name ? name : "");
-	blog(LOG_INFO, "[palette-lock] '%s': dock edit: audio source -> '%s'", obs_source_get_name(src),
-	     name ? name : "");
-	obs_source_update(src, s);
-	obs_data_release(s);
-	return true;
-}
-
-const char *palette_lock_audio(obs_source_t *src)
-{
-	obs_data_t *s = obs_source_get_settings(src);
-	char *out = bstrdup(obs_data_get_string(s, "audio_source"));
-	obs_data_release(s);
-	return out;
 }
 
 bool palette_lock_set_action(obs_source_t *src, const char *action)

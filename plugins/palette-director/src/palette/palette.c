@@ -411,3 +411,53 @@ void pl_colour_to_hex(struct pl_colour c, char out[PL_HEX_LEN])
 		b = 255;
 	snprintf(out, PL_HEX_LEN, "#%02X%02X%02X", r, g, b);
 }
+
+/* ---- Render guards (spec 4.2) ---- */
+int pl_sanitize_for_render(struct pl_set *s, int *live, int *prev)
+{
+	int fix = PL_FIX_NONE;
+	if (!s)
+		return fix;
+
+	/* an empty palette set: fall back to the built-in palette */
+	if (s->n_palettes < 1) {
+		s->n_palettes = 1;
+		pl_palette_default(&s->palettes[0], "Palette 1");
+		fix |= PL_FIX_EMPTY_SET;
+	} else if (s->n_palettes > PL_MAX_PALETTES) {
+		s->n_palettes = PL_MAX_PALETTES;
+		fix |= PL_FIX_EMPTY_SET;
+	}
+
+	/* unknown mode / out-of-range colour counts */
+	for (int i = 0; i < s->n_palettes; i++) {
+		struct pl_palette *p = &s->palettes[i];
+		if (p->mode != PL_MODE_GRADIENT && p->mode != PL_MODE_DUOTONE) {
+			p->mode = PL_MODE_GRADIENT;
+			fix |= PL_FIX_MODE;
+		}
+		if (p->n_colours < 1 || p->n_colours > PL_MAX_COLOURS) {
+			if (p->n_colours < 1)
+				p->n_colours = 1;
+			else
+				p->n_colours = PL_MAX_COLOURS;
+			fix |= PL_FIX_N_COLOURS;
+		}
+	}
+
+	if (live) {
+		int l = *live;
+		if (l < 0 || l >= s->n_palettes) {
+			l = (l < 0) ? 0 : s->n_palettes - 1;
+			*live = l;
+			fix |= PL_FIX_LIVE;
+		}
+	}
+	if (prev) {
+		if (*prev >= s->n_palettes || *prev < -1) {
+			*prev = -1;
+			fix |= PL_FIX_PREV;
+		}
+	}
+	return fix;
+}

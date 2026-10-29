@@ -1,5 +1,5 @@
-# Self-contained offline Director test project. Builds the pure-C++ Director library
-# (no libobs/Qt) plus a doctest suite driven by synthetic WAV fixtures.
+# Self-contained offline Director test project. Builds the pure-C++ Palette Director follower
+# core (no libobs/Qt) plus a doctest suite driven by scripted clock samples.
 #
 # Standalone:  cmake -S tests -B build-tests && cmake --build build-tests \
 #              && ctest --test-dir build-tests --output-on-failure
@@ -24,18 +24,20 @@ enable_testing()
 
 set(PD_DIRECTOR_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../src/director)
 
+# The libobs-free Palette Director follower core (director_follow::Follower -> pd::Scheduler).
+# Sources are listed by path so the cross-plugin audit can compile them into another project.
 add_library(
-  pd_director
+  pd_palette_director
   STATIC
-  ${PD_DIRECTOR_ROOT}/director.cpp
-  ${PD_DIRECTOR_ROOT}/analysis.cpp
-  ${PD_DIRECTOR_ROOT}/beat_tracker.cpp
-  ${PD_DIRECTOR_ROOT}/section_state.cpp
+  ${PD_DIRECTOR_ROOT}/palette-director.cpp
   ${PD_DIRECTOR_ROOT}/scheduler.cpp
 )
-target_include_directories(pd_director PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_include_directories(
+  pd_palette_director
+  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../src ${CMAKE_CURRENT_SOURCE_DIR}/../../../common
+)
 
-# Pure-C palette set model (libobs/Qt-free) exercised by test_palette.cpp.
+# Pure-C palette set model + set files (libobs/Qt-free) exercised by test_palette.cpp.
 set(PD_PALETTE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../src/palette)
 
 add_library(pd_palette STATIC ${PD_PALETTE_ROOT}/palette.c ${CMAKE_CURRENT_SOURCE_DIR}/../src/sets/set-file.cpp)
@@ -45,30 +47,21 @@ add_executable(
   pd_director_tests
   doctest_main.cpp
   test_rng.cpp
-  test_bpm.cpp
-  test_sections.cpp
   test_scheduler.cpp
   test_commands.cpp
-  test_silence.cpp
-  test_determinism.cpp
   test_palette.cpp
   test_cbuffer_layout.cpp
-  test_breakdown_bpm.cpp
   test_host_api.cpp
   test_set_file.cpp
-  test_audio_level.cpp
   test_drop_cycle.cpp
-  test_clock_api.cpp
-  test_music_commands.cpp
-  fixtures/gen_fixtures.cpp
+  test_follower.cpp
 )
-target_link_libraries(pd_director_tests PRIVATE pd_director pd_palette)
+target_link_libraries(pd_director_tests PRIVATE pd_palette_director pd_palette)
 target_compile_definitions(pd_director_tests PRIVATE PD_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_include_directories(
   pd_director_tests
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/director
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/doctest
