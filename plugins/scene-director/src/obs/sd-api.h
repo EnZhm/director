@@ -15,7 +15,7 @@
 namespace sdapi {
 
 struct Status {
-	bool clock_pd = false; // following Palette Director (else free-running)
+	bool clock_following = false; // following Music Director (else idle, waiting for it)
 	double bpm = 0.0, beats = 0.0;
 	int section = 0; // cd::Section
 
@@ -42,7 +42,7 @@ struct Status {
 	std::vector<std::string> log; // the newest lines (up to 200), oldest first
 };
 
-// True for both the new id and the deprecated Clip Director alias.
+// True for the Scene Director source id.
 bool is_scene_director(obs_source_t *src);
 bool status(obs_source_t *src, Status &out);
 

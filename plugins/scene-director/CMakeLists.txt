@@ -23,8 +23,8 @@ if(ENABLE_FRONTEND_API)
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ENABLE_FRONTEND_API)
 endif()
 
-# winmm: MIDI in (MIDI Director) and MIDI out (Scene Director). Windows only; elsewhere
-# common/midi/director-midi.cpp is a stub that reports no devices.
+# winmm: MIDI out for Scene Director. Windows only; elsewhere common/midi/director-midi.cpp is a
+# stub that reports no devices.
 if(WIN32)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE winmm)
 endif()
@@ -60,7 +60,6 @@ target_sources(
     src/core/settings.cpp
     src/core/switch_sched.cpp
     src/dock/sd-dock.cpp
-    src/dock/midi-director-dock.cpp
 )
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE src src/core src/obs ../../common ../../common/midi ../../include)
 

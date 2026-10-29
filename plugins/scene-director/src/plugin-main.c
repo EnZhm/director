@@ -26,15 +26,12 @@ extern void scene_director_source_load(void);
 extern void scene_director_dock_load(void);
 extern void scene_director_hotkey_load(void);
 extern void scene_director_hotkey_unload(void);
-extern void scene_director_midi_dock_load(void);
-extern void scene_director_midi_dock_unload(void);
 
 bool obs_module_load(void)
 {
 	obs_log(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
 	scene_director_source_load();
 	scene_director_dock_load();
-	scene_director_midi_dock_load();
 	scene_director_hotkey_load();
 	return true;
 }
@@ -42,6 +39,5 @@ bool obs_module_load(void)
 void obs_module_unload(void)
 {
 	scene_director_hotkey_unload();
-	scene_director_midi_dock_unload();
 	obs_log(LOG_INFO, "plugin unloaded");
 }
