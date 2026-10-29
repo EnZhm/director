@@ -38,9 +38,9 @@ is not in the active scene.
 #include <string>
 #include <vector>
 
-#include "core/midi_msg.h"
+#include "midi_msg.h"
 #include "obs/sd-api.h"
-#include "obs/sd-midi.h"
+#include "director-midi.h"
 
 namespace {
 
@@ -249,7 +249,7 @@ private:
 	{
 		QStringList names;
 		names << obs_module_text("MidiOutDevice.None");
-		for (const sdmidi::Device &d : sdmidi::output_devices())
+		for (const director_midi::Device &d : director_midi::output_devices())
 			names << text_of(d.name);
 		QStringList had;
 		for (int i = 0; i < devices_->count(); ++i)
@@ -260,7 +260,7 @@ private:
 		devices_->blockSignals(true);
 		devices_->clear();
 		devices_->addItem(obs_module_text("MidiOutDevice.None"), QString());
-		for (const sdmidi::Device &d : sdmidi::output_devices())
+		for (const director_midi::Device &d : director_midi::output_devices())
 			devices_->addItem(text_of(d.name), text_of(d.name));
 		const int at = devices_->findText(keep);
 		devices_->setCurrentIndex(at >= 0 ? at : 0);

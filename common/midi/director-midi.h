@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-namespace sdmidi {
+namespace director_midi {
 
 struct Device {
 	std::string name;
@@ -95,4 +95,4 @@ private:
 	std::unique_ptr<Impl> impl_;
 };
 
-} // namespace sdmidi
+} // namespace director_midi

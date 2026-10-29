@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "core/midi_msg.h"
+#include "midi_msg.h"
 #include "core/switch_sched.h"
 
 namespace sdapi {

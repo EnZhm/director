@@ -24,7 +24,7 @@ if(ENABLE_FRONTEND_API)
 endif()
 
 # winmm: MIDI in (MIDI Director) and MIDI out (Scene Director). Windows only; elsewhere
-# sd-midi.cpp is a stub that reports no devices.
+# common/midi/director-midi.cpp is a stub that reports no devices.
 if(WIN32)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE winmm)
 endif()
@@ -54,15 +54,15 @@ target_sources(
     src/plugin-main.c
     src/obs/sd-source.cpp
     src/obs/sd-hotkeys.cpp
-    src/obs/sd-midi.cpp
-    src/core/midi_map.cpp
-    src/core/midi_msg.cpp
+    ../../common/midi/director-midi.cpp
+    ../../common/midi/midi_map.cpp
+    ../../common/midi/midi_msg.cpp
     src/core/settings.cpp
     src/core/switch_sched.cpp
     src/dock/sd-dock.cpp
     src/dock/midi-director-dock.cpp
 )
-target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE src src/core src/obs)
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE src src/core src/obs ../../common ../../common/midi ../../include)
 
 # the MIDI output note-off worker runs on its own thread
 find_package(Threads REQUIRED)

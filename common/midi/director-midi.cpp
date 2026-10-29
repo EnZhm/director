@@ -1,5 +1,5 @@
-// Scene Director: one WinMM MIDI wrapper for the whole plugin. See sd-midi.h.
-#include "sd-midi.h"
+// Director suite: one WinMM MIDI wrapper (MIDI in for Music Director, MIDI out for Scene Director). See director-midi.h.
+#include "director-midi.h"
 
 #include <algorithm>
 #include <chrono>
@@ -16,7 +16,7 @@
 #include <mmsystem.h>
 #endif
 
-namespace sdmidi {
+namespace director_midi {
 
 namespace {
 
@@ -528,4 +528,4 @@ uint64_t Output::sent() const
 	return impl_->sent;
 }
 
-} // namespace sdmidi
+} // namespace director_midi

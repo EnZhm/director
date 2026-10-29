@@ -29,12 +29,12 @@ deleted.
 #include <vector>
 
 #include "pd-clock-api.h"
-#include "core/midi_msg.h"
+#include "midi_msg.h"
 #include "core/settings.h"
 #include "core/switch_sched.h"
 #include "core/types.h"
 #include "obs/sd-api.h"
-#include "obs/sd-midi.h"
+#include "director-midi.h"
 
 namespace {
 
@@ -54,7 +54,7 @@ struct SdSource {
 
 	cd::SourceConfig cfg;
 	std::unique_ptr<cd::SwitchScheduler> sched;
-	std::unique_ptr<sdmidi::Output> out;
+	std::unique_ptr<director_midi::Output> out;
 
 	double beats = 0.0, bpm = 128.0;
 	bool clock_ok = false, clock_was_ok = false;
@@ -96,7 +96,7 @@ void note(SdSource *c, const char *fmt, ...)
 /* mx held: make sure the settings' output device is the one we are aiming at */
 void ensure_output(SdSource *c)
 {
-	sdmidi::Output &o = *c->out;
+	director_midi::Output &o = *c->out;
 	if (c->cfg.midi_out_device != c->out_want) {
 		c->out_want = c->cfg.midi_out_device;
 		if (c->cfg.midi_out_device.empty()) {
@@ -281,7 +281,7 @@ void *sd_create(obs_data_t *settings, obs_source_t *source)
 {
 	SdSource *c = new SdSource();
 	c->self = source;
-	c->out = std::make_unique<sdmidi::Output>();
+	c->out = std::make_unique<director_midi::Output>();
 	c->sched = std::make_unique<cd::SwitchScheduler>();
 	apply(c, settings);
 	obs_log(LOG_INFO, "'%s': source ready (renders nothing: it holds the set and drives MIDI)",
@@ -369,7 +369,7 @@ bool on_refresh_devices(obs_properties_t *props, obs_property_t *, void *)
 	if (p)
 		obs_property_list_clear(p);
 	obs_property_list_add_string(p, obs_module_text("MidiOutDevice.None"), "");
-	for (const sdmidi::Device &d : sdmidi::output_devices())
+	for (const director_midi::Device &d : director_midi::output_devices())
 		obs_property_list_add_string(p, d.name.c_str(), d.name.c_str());
 	return true;
 }
@@ -389,7 +389,7 @@ obs_properties_t *sd_properties(void *)
 	obs_property_t *dev = obs_properties_add_list(mi, "midi_out_device", obs_module_text("MidiOutDevice"),
 						      OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(dev, obs_module_text("MidiOutDevice.None"), "");
-	for (const sdmidi::Device &d : sdmidi::output_devices())
+	for (const director_midi::Device &d : director_midi::output_devices())
 		obs_property_list_add_string(dev, d.name.c_str(), d.name.c_str());
 	obs_properties_add_button2(mi, "midi_rescan", obs_module_text("MidiRescan"), on_refresh_devices, nullptr);
 	add_type_list(mi, "next_type", obs_module_text("MidiNext"));
@@ -480,7 +480,7 @@ bool status(obs_source_t *src, Status &o)
 	o.beats = c->beats;
 	o.section = (int)c->section;
 
-	o.midi_available = sdmidi::available();
+	o.midi_available = director_midi::available();
 	o.midi_open = c->out->is_open();
 	o.midi_device = c->cfg.midi_out_device;
 	o.midi_open_name = c->out->device_name();

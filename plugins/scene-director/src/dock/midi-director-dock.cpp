@@ -36,9 +36,9 @@ frames it into MIDI messages and triggers hotkeys from here.
 #include <string>
 #include <vector>
 
-#include "core/midi_map.h"
+#include "midi_map.h"
 #include "obs/sd-hotkeys.h"
-#include "obs/sd-midi.h"
+#include "director-midi.h"
 
 namespace {
 
@@ -169,7 +169,7 @@ public:
 		refresh_hotkeys(true);
 		rebuild_table();
 		obs_frontend_add_save_callback(save_callback, this);
-		show_status(sdmidi::available() ? no_device() : QString(obs_module_text("MidiStatus.NoBackend")));
+		show_status(director_midi::available() ? no_device() : QString(obs_module_text("MidiStatus.NoBackend")));
 	}
 
 	~MidiDirectorDock() override
@@ -185,7 +185,7 @@ private:
 
 	void list_devices()
 	{
-		const std::vector<sdmidi::Device> found = sdmidi::input_devices();
+		const std::vector<director_midi::Device> found = director_midi::input_devices();
 		QStringList names;
 		names << obs_module_text("MidiDevice.None");
 		for (const auto &d : found)
@@ -473,7 +473,7 @@ private:
 	QTableWidget *table_;
 	QPlainTextEdit *monitor_;
 
-	sdmidi::Input input_;
+	director_midi::Input input_;
 	cd::midi::Assembler assembler_;
 	cd::midi::Map map_;
 	cd::midi::Learn learn_;

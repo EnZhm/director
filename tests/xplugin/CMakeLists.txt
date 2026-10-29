@@ -14,7 +14,13 @@ enable_testing()
 
 set(DIRECTOR_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 
-add_executable(xplugin_tests main.cpp test_follow.cpp)
+find_package(Threads REQUIRED)
+add_library(director_midi_core STATIC ${DIRECTOR_ROOT}/common/midi/midi_map.cpp ${DIRECTOR_ROOT}/common/midi/midi_msg.cpp)
+target_include_directories(director_midi_core PUBLIC ${DIRECTOR_ROOT}/common/midi)
+target_link_libraries(director_midi_core PUBLIC Threads::Threads)
+
+add_executable(xplugin_tests main.cpp test_follow.cpp test_midi_map.cpp test_midi_msg.cpp)
+target_link_libraries(xplugin_tests PRIVATE director_midi_core)
 target_include_directories(
   xplugin_tests
   PRIVATE ${DIRECTOR_ROOT}/common ${DIRECTOR_ROOT}/plugins/palette-director/third_party/doctest
