@@ -1,0 +1,163 @@
+#include "beat_tracker.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace md {
+
+BeatTracker::BeatTracker(uint32_t sample_rate, std::size_t hop, double fallback_bpm)
+	: sample_rate_(sample_rate),
+	  hop_(hop ? hop : 256),
+	  env_rate_(static_cast<double>(sample_rate_) / static_cast<double>(hop_)),
+	  fallback_bpm_(fallback_bpm),
+	  effective_bpm_(fallback_bpm)
+{
+	min_buf_ = static_cast<std::size_t>(env_rate_ * 3.0); // ~3 s before estimating
+	max_buf_ = static_cast<std::size_t>(env_rate_ * 8.0); // ~8 s window
+	lag_min_ = static_cast<std::size_t>(env_rate_ * 60.0 / 180.0);
+	lag_max_ = static_cast<std::size_t>(env_rate_ * 60.0 / 90.0);
+	recent_len_ = static_cast<std::size_t>(env_rate_ * 2.0); // ~2 s (>= 3 beats at 90 BPM)
+}
+
+void BeatTracker::reset()
+{
+	beats_ = 0.0;
+	estimated_bpm_ = 0.0;
+	confidence_ = 0.0;
+	effective_bpm_ = fallback_bpm_;
+	have_lock_ = false;
+	locked_bpm_ = 0.0;
+	onset_buf_.clear();
+	recent_max_.clear();
+	onset_peak_ = 0.0;
+	taps_.clear();
+	have_tap_ = false;
+	tapped_bpm_ = 0.0;
+	locked_ = false;
+	frozen_bpm_ = 0.0;
+}
+
+void BeatTracker::tap(double now_s)
+{
+	taps_.push_back(now_s);
+	while (!taps_.empty() && now_s - taps_.front() > 3.0)
+		taps_.pop_front();
+	while (taps_.size() > 8)
+		taps_.pop_front();
+	if (taps_.size() < 2)
+		return;
+	const double span = taps_.back() - taps_.front();
+	if (span <= 0.0)
+		return;
+	const double bpm = 60.0 * static_cast<double>(taps_.size() - 1) / span;
+	if (bpm < 40.0 || bpm > 300.0)
+		return;
+	tapped_bpm_ = bpm;
+	have_tap_ = true;
+	/* a tap sets the tempo and holds it; Lock BPM toggles the hold off again */
+	locked_ = true;
+	frozen_bpm_ = bpm;
+}
+
+void BeatTracker::set_lock(bool locked)
+{
+	locked_ = locked;
+	if (locked_)
+		frozen_bpm_ = effective_bpm_;
+}
+
+void BeatTracker::nudge(double beats)
+{
+	beats_ += beats;
+	if (beats_ < 0.0)
+		beats_ = 0.0;
+}
+
+double BeatTracker::autocorr(std::size_t lag) const
+{
+	const std::size_t n = onset_buf_.size();
+	double s = 0.0;
+	for (std::size_t i = lag; i < n; ++i)
+		s += onset_buf_[i] * onset_buf_[i - lag];
+	return s;
+}
+
+void BeatTracker::process(double onset, bool silent, double dt)
+{
+	onset_buf_.push_back(onset);
+	if (onset_buf_.size() > max_buf_)
+		onset_buf_.pop_front();
+
+	// BPM + confidence from autocorrelation of the onset envelope.
+	estimated_bpm_ = 0.0;
+	confidence_ = 0.0;
+	const std::size_t n = onset_buf_.size();
+	if (n >= min_buf_ && n > lag_max_ + 1) {
+		const double e0 = autocorr(0);
+		if (e0 > 1e-12) {
+			std::size_t best_lag = 0;
+			double best_val = -1.0;
+			for (std::size_t lag = lag_min_; lag <= lag_max_ && lag < n; ++lag) {
+				const double s = autocorr(lag);
+				if (s > best_val) {
+					best_val = s;
+					best_lag = lag;
+				}
+			}
+			if (best_lag > 0 && best_lag < n - 1) {
+				const double y0 = autocorr(best_lag - 1);
+				const double y1 = best_val;
+				const double y2 = autocorr(best_lag + 1);
+				const double denom = y0 - 2.0 * y1 + y2;
+				const double delta = (denom != 0.0) ? 0.5 * (y0 - y2) / denom : 0.0;
+				const double lagf = static_cast<double>(best_lag) + delta;
+				if (lagf > 0.0)
+					estimated_bpm_ = 60.0 * env_rate_ / lagf;
+				confidence_ = best_val / e0;
+			}
+		}
+	}
+
+	// A breakdown's onset envelope is only residue of the pad (no transients); its periodic
+	// pattern can still win the autocorrelation with a high normalised score. Require the
+	// recent onset activity to be a real fraction of the onset peak before trusting it.
+	onset_peak_ = std::max(onset_peak_ * 0.999, onset);
+	recent_max_.push_back(onset);
+	if (recent_max_.size() > recent_len_)
+		recent_max_.pop_front();
+	const double recent = *std::max_element(recent_max_.begin(), recent_max_.end());
+	if (recent < 0.1 * onset_peak_)
+		confidence_ = 0.0;
+
+	if (confidence_ >= conf_threshold_) {
+		have_lock_ = true;
+		locked_bpm_ = estimated_bpm_;
+	}
+
+	// Effective tempo: fallback on silence / no lock, hold the last lock through a
+	// breakdown, use the estimate once confident.
+	if (silent) {
+		effective_bpm_ = fallback_bpm_;
+	} else if (confidence_ >= conf_threshold_) {
+		effective_bpm_ = estimated_bpm_;
+	} else if (have_lock_) {
+		effective_bpm_ = locked_bpm_;
+	} else {
+		effective_bpm_ = fallback_bpm_;
+	}
+	// v1.2: Lock BPM freezes whatever tempo the grid was running at (a tap sets it).
+	if (locked_)
+		effective_bpm_ = frozen_bpm_;
+
+	beats_ += dt * effective_bpm_ / 60.0;
+
+	// Soft phase-lock: a strong onset near a beat pulls the grid halfway toward it.
+	if (onset > 0.5 * onset_peak_ && onset_peak_ > 1e-12) {
+		const double frac = beats_ - std::floor(beats_);
+		const double err = (frac < 0.5) ? frac : (frac - 1.0);
+		if (std::fabs(err) < 0.25)
+			beats_ -= 0.5 * err;
+	}
+}
+
+} // namespace md
