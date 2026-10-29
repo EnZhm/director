@@ -430,7 +430,13 @@ static void worker_main(pd_host *h)
 			std::lock_guard<std::mutex> g(h->view_mx);
 			for (const auto &e : evs) {
 				push_log(h, e.phrase, e.detail);
-				if (log_tokens > 0) {
+				if (e.type == pd::Event::Type::SectionChange && e.section_seq >= 0) {
+					/* every section edge is logged (not rate-limited): the gate compares seq and
+					 * beat with Music Director's section line and the other followers */
+					blog(LOG_INFO, "[palette-director] '%s': %s seq=%lld beat=%llu",
+					     obs_source_get_name(h->filter), e.detail.c_str(), (long long)e.section_seq,
+					     (unsigned long long)e.beat);
+				} else if (log_tokens > 0) {
 					log_tokens--;
 					blog(LOG_INFO, "[palette-director] '%s': %s (beat %llu, phrase %llu)",
 					     obs_source_get_name(h->filter), e.detail.c_str(),

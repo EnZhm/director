@@ -143,6 +143,7 @@ struct Event {
 	int palette = -1;                  // PaletteChange: new live index
 	int prev_palette = -1;             // PaletteChange: outgoing index
 	std::string detail;                // human-readable reason
+	int64_t section_seq = -1;          // SectionChange: Music Director's section_seq (the OBS log line)
 };
 
 // One clock sample (a subset of struct director_clock, include/director-clock.h). Filled by the

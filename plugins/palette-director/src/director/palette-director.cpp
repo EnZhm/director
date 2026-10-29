@@ -194,6 +194,7 @@ struct PaletteDirector::Impl {
 				ev.type = Event::Type::SectionChange;
 				ev.beat = static_cast<uint64_t>(e.section_beat);
 				ev.section = sec;
+				ev.section_seq = e.section_seq;
 				ev.detail = std::string("section -> ") + section_name(sec);
 				append_events({ev});
 				append_events(scheduler_.on_section_change(sec, static_cast<uint64_t>(e.section_beat)));
@@ -206,6 +207,7 @@ struct PaletteDirector::Impl {
 				ev.type = Event::Type::SectionChange;
 				ev.beat = static_cast<uint64_t>(e.section_beat);
 				ev.section = sec;
+				ev.section_seq = e.section_seq;
 				ev.detail = std::string("section -> ") + section_name(sec);
 				append_events({ev});
 				append_events(scheduler_.on_section_change(sec, static_cast<uint64_t>(e.section_beat)));
