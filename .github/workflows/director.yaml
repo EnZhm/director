@@ -1,0 +1,120 @@
+name: Director
+run-name: ${{ github.event.pull_request.title || github.ref_name }} 🎛️
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ['*']
+permissions:
+  contents: read
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  setup:
+    name: Version + plugin list 🏷️
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      plugins: ${{ steps.v.outputs.plugins }}
+      tests: ${{ steps.v.outputs.tests }}
+      config: ${{ steps.v.outputs.config }}
+      sha: ${{ steps.v.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: One version for every plugin
+        run: tools/check-version.sh
+      - id: v
+        run: |
+          echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA:0:9}" >> "$GITHUB_OUTPUT"
+          plugins=$(for d in plugins/*/; do [ -f "$d/buildspec.json" ] && basename "$d"; done | jq -R . | jq -cs .)
+          tests=$( (for d in plugins/*/; do [ -f "$d/tests/CMakeLists.txt" ] && echo "plugins/$(basename "$d")/tests"; done; [ -f tests/xplugin/CMakeLists.txt ] && echo tests/xplugin) | jq -R . | jq -cs .)
+          echo "plugins=$plugins" >> "$GITHUB_OUTPUT"
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
+          # A semver tag builds Release (as obs-plugintemplate did); everything else RelWithDebInfo.
+          if [[ "${GITHUB_REF_TYPE}" == tag && "${GITHUB_REF_NAME}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(beta|rc)[0-9]+)?$ ]]; then
+            echo "config=Release" >> "$GITHUB_OUTPUT"
+          else
+            echo "config=RelWithDebInfo" >> "$GITHUB_OUTPUT"
+          fi
+
+  format:
+    name: clang-format 19 🔍
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: pipx install clang-format==19.1.7
+      - name: Check formatting
+        run: |
+          find plugins common include tests -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) \
+            -not -path '*/third_party/*' -not -path '*/build*' -print0 2>/dev/null \
+            | xargs -0 -r clang-format --dry-run -Werror
+
+  tests:
+    name: Tests ${{ matrix.dir }} 🧪
+    needs: setup
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: ${{ fromJSON(needs.setup.outputs.tests) }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S ${{ matrix.dir }} -B build-tests
+      - run: cmake --build build-tests -j 4
+      - run: ctest --test-dir build-tests --output-on-failure
+
+  collisions:
+    name: Collision audit 🧩
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit
+        run: if [ -x tools/collision-audit ]; then tools/collision-audit; else echo "collision audit arrives with the AUDIT card"; fi
+
+  windows:
+    name: Windows ${{ matrix.plugin }} 🪟
+    needs: setup
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJSON(needs.setup.outputs.plugins) }}
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build
+        run: plugins/${{ matrix.plugin }}/.github/scripts/Build-Windows.ps1 -Target x64 -Configuration ${{ needs.setup.outputs.config }}
+      - name: Package
+        run: plugins/${{ matrix.plugin }}/.github/scripts/Package-Windows.ps1 -Target x64 -Configuration ${{ needs.setup.outputs.config }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-${{ matrix.plugin }}
+          path: plugins/${{ matrix.plugin }}/release/${{ matrix.plugin }}-${{ needs.setup.outputs.version }}-windows-x64*.*
+
+  package:
+    name: director-${{ needs.setup.outputs.version }}-windows-x64.zip 📦
+    needs: [setup, windows, tests, format]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: plugin-*
+          path: parts
+      - name: Assemble the suite zip
+        run: tools/package-suite.sh "${{ needs.setup.outputs.version }}" parts out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: director-${{ needs.setup.outputs.version }}-windows-x64-${{ needs.setup.outputs.sha }}
+          path: out/*

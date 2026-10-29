@@ -1,0 +1,8 @@
+# Pages (legacy Jekyll build from main /): publish the docs, not the plugin sources
+exclude:
+  - plugins
+  - common
+  - include
+  - tests
+  - tools
+  - VERSION

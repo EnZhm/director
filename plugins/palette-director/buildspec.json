@@ -38,8 +38,8 @@
     },
     "name": "palette-director",
     "displayName": "Palette Director",
-    "version": "1.2.0",
+    "version": "2.0.0",
     "author": "EnZhm",
-    "website": "https://github.com/EnZhm/obs-palette-director",
+    "website": "https://github.com/EnZhm/director",
     "email": "me@example.com"
 }
