@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""collision-audit: the four Director plugins must not share an OBS identifier.
+
+Scans plugins/<name>/src for the identifiers OBS keeps in one global namespace and fails on any
+value claimed by more than one plugin:
+
+  source/filter ids   .id = "..."             obs_register_source
+  dock ids            obs_frontend_add_dock_by_id("...")
+  hotkey names        obs_hotkey_register_frontend("...") / _source / _pair, and hotkey tables
+                      {"name", "Label", ...} whose name carries a plugin hotkey prefix
+  proc handlers       proc_handler_add(ph, "void NAME(...)")
+  signals             signal_handler_add(sh, "void NAME(...)")
+  scene-collection    obs_data_set_obj / obs_data_get_obj on the frontend save data, and the
+  keys                kSaveKey / kSettingsKey style constants
+  log prefixes        buildspec name (obs_log's [name] prefix)
+
+Also checks: every plugin's buildspec name is its directory name, and no plugin still carries a
+copy of the retired pd-clock-api.h. Exit 1 on any finding. Prints a table either way.
+"""
+import json
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+PLUGINS = sorted(p for p in (ROOT / "plugins").iterdir() if (p / "buildspec.json").exists())
+
+PATTERNS = {
+    "source id": [re.compile(r'\.id\s*=\s*"([^"]+)"'), re.compile(r'kSourceId\w*\s*=\s*"([^"]+)"')],
+    "dock id": [re.compile(r'obs_frontend_add_dock_by_id\(\s*"([^"]+)"'), re.compile(r'kDockId\w*\s*=\s*"([^"]+)"')],
+    "hotkey": [
+        re.compile(r'obs_hotkey_register_(?:frontend|source)\(\s*(?:[^,]+,\s*)?"([^"]+)"'),
+        re.compile(r'obs_hotkey_pair_register_frontend\(\s*"([^"]+)"'),
+        re.compile(r'\{\s*"((?:md|pd|cd|sd|scene_director|clip_director|palette_director|music_director)_[a-z0-9_]+)"\s*,'),
+        re.compile(r'\{\s*"((?:PaletteDirector|MusicDirector|ClipDirector|SceneDirector)\.[A-Za-z0-9_]+)"\s*,'),
+        re.compile(r'constexpr\s+const\s+char\s*\*\s*k\w+\s*=\s*"((?:md|cd|sd|scene_director|clip_director)_[a-z0-9_]+)"'),
+    ],
+    "proc": [re.compile(r'"void\s+([a-z_][a-z0-9_]*)\s*\(')],
+    "signal": [re.compile(r'signal_handler_add\([^"]*"void\s+([a-z_][a-z0-9_]*)\s*\(')],
+    "collection key": [
+        re.compile(r'obs_data_(?:set|get)_obj\(\s*save_data\s*,\s*"([^"]+)"'),
+        re.compile(r'k(?:Save|Settings|Collection)Key\w*\s*=\s*"([^"]+)"'),
+    ],
+}
+
+
+def scan(plugin: pathlib.Path):
+    found = {k: set() for k in PATTERNS}
+    for f in (plugin / "src").rglob("*"):
+        if f.suffix not in (".c", ".cpp", ".h", ".hpp"):
+            continue
+        text = f.read_text(errors="replace")
+        for kind, regs in PATTERNS.items():
+            for r in regs:
+                for m in r.finditer(text):
+                    found[kind].add(m.group(1))
+    # proc names are also matched by signal declarations; keep "proc" to proc_handler_add calls only
+    proc = set()
+    for f in (plugin / "src").rglob("*"):
+        if f.suffix in (".c", ".cpp"):
+            for m in re.finditer(r'proc_handler_add\(\s*\w+\s*,\s*"void\s+([a-z_][a-z0-9_]*)', f.read_text(errors="replace")):
+                proc.add(m.group(1))
+    found["proc"] = proc
+    if plugin.name == "music-director":
+        # Music Director reads Palette Director 1.2.0's pd_* clock hotkey bindings to migrate them;
+        # it registers only md_* names.
+        found["hotkey"] = {h for h in found["hotkey"] if not h.startswith("pd_")}
+    name = json.loads((plugin / "buildspec.json").read_text())["name"]
+    found["log prefix"] = {name}
+    return name, found
+
+
+def main() -> int:
+    fail = []
+    table = {}
+    for p in PLUGINS:
+        name, found = scan(p)
+        if name != p.name:
+            fail.append(f"{p.name}: buildspec name '{name}' != directory")
+        for stale in p.rglob("pd-clock-api.h"):
+            fail.append(f"{p.name}: retired clock header still present: {stale.relative_to(ROOT)}")
+        table[p.name] = found
+    kinds = list(PATTERNS) + ["log prefix"]
+    for kind in kinds:
+        owners = {}
+        for plugin, found in table.items():
+            for v in found.get(kind, ()):
+                owners.setdefault(v, []).append(plugin)
+        dup = {v: o for v, o in owners.items() if len(o) > 1}
+        for v, o in sorted(dup.items()):
+            fail.append(f"{kind} '{v}' claimed by {', '.join(o)}")
+    width = max(len(k) for k in kinds)
+    for plugin, found in table.items():
+        print(f"== {plugin}")
+        for kind in kinds:
+            vals = sorted(found.get(kind, ()))
+            print(f"  {kind:<{width}}  {len(vals):3d}  {', '.join(vals)}")
+    if fail:
+        print("\nCOLLISIONS / FINDINGS:")
+        for f in fail:
+            print("  " + f)
+        print("FAIL")
+        return 1
+    print(f"\nPASS: {len(table)} plugins, no shared source/dock/hotkey/proc/signal/collection-key/log-prefix ids")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

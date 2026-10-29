@@ -1,0 +1,5 @@
+build*/
+.ccache/
+plugins/*/release/
+plugins/*/build_*/
+.DS_Store

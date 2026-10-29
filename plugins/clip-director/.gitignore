@@ -1,0 +1,7 @@
+/build*/
+/build_*/
+!/build-aux
+.deps
+.vs/
+*.user
+__pycache__/

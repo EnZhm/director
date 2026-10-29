@@ -1,0 +1,90 @@
+cmake_minimum_required(VERSION 3.28...3.30)
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCOPE)
+
+project(${_name} VERSION ${_version})
+
+option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
+option(ENABLE_QT "Use Qt functionality" ON)
+option(PD_TEST_HOOKS "Compile the sandbox test hooks (dock test cycle, UI auto answers); never in releases" OFF)
+
+include(compilerconfig)
+include(defaults)
+include(helpers)
+
+add_library(${CMAKE_PROJECT_NAME} MODULE)
+
+find_package(libobs REQUIRED)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
+
+if(ENABLE_FRONTEND_API)
+  find_package(obs-frontend-api QUIET)
+  if(TARGET OBS::obs-frontend-api)
+    set(HAVE_FRONTEND_API TRUE)
+    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::obs-frontend-api)
+  else()
+    message(WARNING "obs-frontend-api not found; building without the Palette Director dock")
+    set(HAVE_FRONTEND_API FALSE)
+  endif()
+endif()
+
+if(ENABLE_QT)
+  find_package(Qt6 COMPONENTS Widgets Core)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets)
+  target_compile_options(
+    ${CMAKE_PROJECT_NAME}
+    PRIVATE $<$<C_COMPILER_ID:Clang,AppleClang>:-Wno-quoted-include-in-framework-header -Wno-comma>
+  )
+  set_target_properties(
+    ${CMAKE_PROJECT_NAME}
+    PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON
+  )
+endif()
+
+target_sources(
+  ${CMAKE_PROJECT_NAME}
+  PRIVATE
+    src/plugin-main.c
+    src/palette-lock-filter.c
+    src/palette-lock-host.cpp
+    src/palette/palette.c
+    src/sets/set-file.cpp
+    src/sets/set-store.cpp
+    src/ui/pd-ui.cpp
+    src/director/palette-director.cpp
+    src/director/scheduler.cpp
+    src/dock/dock-widgets.cpp
+    src/dock/palette-director-dock.cpp
+)
+target_include_directories(
+  ${CMAKE_PROJECT_NAME}
+  PRIVATE
+    src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../common
+)
+
+if(HAVE_FRONTEND_API)
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ENABLE_FRONTEND_API)
+endif()
+
+if(ENABLE_QT)
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ENABLE_QT)
+endif()
+
+if(PD_TEST_HOOKS)
+  message(WARNING "PD_TEST_HOOKS is ON: sandbox test hooks are compiled in (do not ship this build)")
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PD_TEST_HOOKS)
+endif()
+
+set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
+
+# --- Palette Director P3: offline Director unit tests (pure C++, no libobs/Qt) ---
+# Kept in an isolated guarded block so it does not collide with other top-level edits.
+# Build with: cmake -S . -B build-tests -DPD_BUILD_TESTS=ON
+# (Alternatively build the self-contained project directly: cmake -S tests -B build-tests)
+option(PD_BUILD_TESTS "Build the offline Director unit tests" OFF)
+if(PD_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
