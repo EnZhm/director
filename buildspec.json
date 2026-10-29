@@ -33,13 +33,13 @@
     },
     "platformConfig": {
         "macos": {
-            "bundleId": "com.enzhm.clip-director"
+            "bundleId": "com.enzhm.scene-director"
         }
     },
-    "name": "clip-director",
-    "displayName": "Clip Director",
-    "version": "1.1.0",
+    "name": "scene-director",
+    "displayName": "Scene Director",
+    "version": "2.0.0",
     "author": "EnZhm",
-    "website": "https://github.com/EnZhm/clip-director",
+    "website": "https://github.com/EnZhm/scene-director",
     "email": "me@example.com"
 }

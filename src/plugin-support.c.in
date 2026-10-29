@@ -23,9 +23,14 @@ const char *PLUGIN_VERSION = "@CMAKE_PROJECT_VERSION@";
 
 void obs_log(int log_level, const char *format, ...)
 {
-	size_t length = 4 + strlen(PLUGIN_NAME) + strlen(format);
+	/* "[name] " + format + the NUL. (The prefixed template only carries the placeholders that
+	 * blogva expands later, so this is all the room the template itself needs.) */
+	size_t length = strlen(PLUGIN_NAME) + strlen(format) + 6;
 
-	char *template = malloc(length + 1);
+	char *template = malloc(length);
+
+	if (!template)
+		return;
 
 	snprintf(template, length, "[%s] %s", PLUGIN_NAME, format);
 

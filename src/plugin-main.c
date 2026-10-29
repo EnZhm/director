@@ -1,5 +1,5 @@
 /*
-Clip Director
+Scene Director
 Copyright (C) 2026 EnZhm
 
 This program is free software; you can redistribute it and/or modify
@@ -22,30 +22,26 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 
-extern void clip_director_source_load(void);
-extern void clip_director_dock_load(void);
-extern void clip_director_syn_hotkeys_load(void);
-extern void clip_director_syn_hotkeys_unload(void);
-extern void clip_director_midi_dock_load(void);
-extern void clip_director_midi_dock_unload(void);
-extern void clip_director_hotkey_load(void);
-extern void clip_director_hotkey_unload(void);
+extern void scene_director_source_load(void);
+extern void scene_director_dock_load(void);
+extern void scene_director_hotkey_load(void);
+extern void scene_director_hotkey_unload(void);
+extern void scene_director_midi_dock_load(void);
+extern void scene_director_midi_dock_unload(void);
 
 bool obs_module_load(void)
 {
 	obs_log(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
-	clip_director_source_load();
-	clip_director_dock_load();
-	clip_director_syn_hotkeys_load();
-	clip_director_midi_dock_load();
-	clip_director_hotkey_load();
+	scene_director_source_load();
+	scene_director_dock_load();
+	scene_director_midi_dock_load();
+	scene_director_hotkey_load();
 	return true;
 }
 
 void obs_module_unload(void)
 {
-	clip_director_syn_hotkeys_unload();
-	clip_director_hotkey_unload();
-	clip_director_midi_dock_unload();
+	scene_director_hotkey_unload();
+	scene_director_midi_dock_unload();
 	obs_log(LOG_INFO, "plugin unloaded");
 }
