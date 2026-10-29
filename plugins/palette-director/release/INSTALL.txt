@@ -1,0 +1,258 @@
+Palette Director 1.2.0 for OBS Studio 32.2.x (Windows x64)
+==========================================================
+
+New in 1.2.0: the Music dock (section 7). Everything about hearing the
+music moves there: BPM, beat lights, section, the level and bass meter, the
+last 64 beats, the audio controls, and the beat-matching buttons (Phrase is
+now, Drop now, Force breakdown, Tap tempo, Lock BPM, Nudge). The Palette
+Director panel keeps palettes, look, changes and lock behaviours. This
+release is part of Director 1.0.0 and ships as Windows x64 only.
+
+New in 1.1.0: a read-only beat clock for other plugins. Clip Director uses
+it to cut clips on the same beat grid as the palettes. Nothing else
+changed: the Director makes exactly the same decisions as in 1.0.1.
+
+New in 1.0.1: PANIC is a toggle (press it again, or Resume, to release),
+an Input gain and a Kick sensitivity control, an audio meter (section 7),
+and the drop colour cycle (section 3).
+
+Palette Director locks a Synesthesia (Spout) VJ feed to a set of colour
+palettes inside OBS, and reacts to the music from your DJ mixer: palettes
+change on drops or phrases, and the lock sometimes lets go so the raw
+visuals show through.
+
+It adds:
+  - a video filter "Palette Lock" (put it on the Spout source)
+  - a dock "Palette Director": the main control panel. You set everything
+    up there and watch what the Director is doing while you play.
+  - a dock "Music": the beat clock and everything about hearing the music:
+    BPM, beat lights, section, meter, the last 64 beats, audio controls and
+    the beat-matching buttons.
+
+It is set-and-forget: set it up once in the panel, then leave it running.
+
+
+1. Install
+----------
+1. Close OBS.
+2. If an older Palette Director is installed, delete the folder
+     C:\ProgramData\obs-studio\plugins\palette-director
+3. Either install the suite (Palette Director and Clip Director in one
+   step: director-1.0.0-windows-x64.zip from
+   https://github.com/EnZhm/director/releases), or unzip
+   palette-director-1.2.0-windows-x64.zip from this repository's releases
+   and copy the folder "palette-director" into
+     C:\ProgramData\obs-studio\plugins\
+   so that these files exist:
+     C:\ProgramData\obs-studio\plugins\palette-director\bin\64bit\palette-director.dll
+     C:\ProgramData\obs-studio\plugins\palette-director\data\effects\palette-lock.effect
+     C:\ProgramData\obs-studio\plugins\palette-director\data\locale\en-US.ini
+     C:\ProgramData\obs-studio\plugins\palette-director\data\sets\neon-default.json
+4. Start OBS 32.2.x. Help > Log Files > View Current Log should show
+     [palette-director] plugin loaded successfully (version 1.2.0)
+   If it does not, check the folder layout above.
+
+
+2. Add the filter to the Spout source
+-------------------------------------
+1. In Sources, right-click the Spout2 source that carries Synesthesia and
+   choose Filters.
+2. Under Effect Filters press "+" and choose "Palette Lock".
+3. Put Palette Lock ABOVE any finishing filters (CRT etc.) so they grade
+   the locked colours.
+4. The filter's own window is deliberately short: Set, Load file...,
+   Audio source, Coverage and an "Open Palette Director panel" button.
+   Everything else is in the panel (and, as a fallback, under "Show
+   advanced settings").
+5. Load the bundled set: press "Load file..." and open
+     C:\ProgramData\obs-studio\plugins\palette-director\data\sets\neon-default.json
+   (the file dialog opens in that folder). The set is copied into your
+   set folder, Documents\PaletteDirector\sets\, and appears in the Set list.
+6. Press "Open Palette Director panel" (or Docks menu > "Palette
+   Director"). Drag the panel where you want it, and open the Music dock
+   (Docks menu > "Music") beside it. See section 7.
+
+
+3. The Palette Director panel
+-----------------------------
+The top of the panel is always visible and shows what is happening:
+  - Filter: which Palette Lock filter the panel shows and controls.
+  - Status: a section chip (GROOVE / BREAKDOWN / DROP), the lock state, the
+    director state, the live palette and Coverage, and a one-line summary,
+    for example
+      Live: Neon Grid - next: Outrun on the next drop - lock ON
+  - Palette pads (up to 16): tap a pad to make it live. The live pad has
+    a bright outline and a crossfade bar; the next pad has a dashed
+    outline. Pads 1-8 show their Ctrl+N hotkey.
+  - Controls: Force off (hold), Force on (lights up while it holds the
+    lock on), Pause director, Prev / Next palette, Rotate colours, PANIC
+    (fills red while active; press it again to release).
+BPM, confidence, the beat lights, the audio meter and the 64-beat timeline
+are in the Music dock (section 7). The pads and controls above are unchanged.
+
+Below it, "Set-up" opens the tabs (the panel remembers if it is open):
+  Set       pick a set; New / Duplicate / Rename / Delete / Save /
+            Load file...; Synesthesia playlist; where the file is saved.
+            Switching away from a set with unsaved changes asks first.
+            At least one set always exists.
+  Palettes  reorder by dragging; Go live; Set as breakdown; New /
+            Duplicate / Delete. Editor: name (must be unique), mode
+            (gradient map or duotone), a large preview, 2-8 colours
+            (click a swatch to pick its colour, or type a hex value; drag
+            to reorder), Add colour, Sort dark -> bright, Reverse. In
+            duotone only the first and last colours are used.
+  Look      Coverage, Input black / white, Brightness from, Contrast,
+            Keep brightness (see section 4).
+  Changes   when palettes change (every drop, every N phrases, random,
+            manual), order (list or shuffle), crossfade, breakdown palette.
+  Director  enabled, lock fade, and the lock behaviours (including the drop
+            colour cycle): random off, off on breakdown, off on drop,
+            breathing, colour rotation, seed. No audio settings here: the
+            audio source, fallback BPM, phrase length, Input gain and Kick
+            sensitivity are in the Music dock (section 7).
+  Log       the Director's full decision log.
+
+Drop colour cycle (Director tab, lock behaviours): when the drop lands
+after a breakdown, the Director sometimes flashes through the palettes
+with hard cuts for a bar (Chance, Length 1-4 bars, Speed 1/4, 1/8 or
+1/16 of a beat), with the lock held on, then settles on the next palette.
+The panel shows a DROP CYCLE chip and the live pad flashes. PANIC, Pause,
+Force off or tapping a pad stops it at once. It also works when palettes
+change "Manual only". If "Off on drop" is on and the cycle runs, the
+cycle replaces the raw bars for that drop. The bundled Neon Default
+set has it on: 50%, 1 bar, 1/8.
+
+Every change you make in the panel is applied to the filter straight away
+and marks the set as changed; press Save on the Set tab to keep it in the
+set file. Closing the panel does not stop the Director.
+
+
+4. Look: Coverage and friends
+-----------------------------
+Coverage (0-100%) is how much of the picture the palette takes over.
+  100% = no source colour shows through while the lock is on; every pixel
+  is a palette colour. 0% = the source unchanged.
+  Breathing and random-off only ever dip BELOW Coverage, never above it.
+  Breathing does nothing while there is no music.
+Input black / white: source brightness at or below Input black maps to
+  the palette's first (darkest) colour, at or above Input white to its
+  last colour. Lower Input white to reach the top of the palette on dim
+  or coloured scenes.
+Brightness from: how a pixel picks its place on the palette.
+  Perceived (default) treats saturated blue as very dark; Max channel
+  treats any fully saturated colour as bright; Average is in between.
+Contrast spreads the source brightness around the middle first.
+Keep brightness mixes the source brightness back in (0 = exact palette
+  colours; higher values can clip towards white).
+The bundled Neon Default set uses Coverage 100%, Keep brightness 0,
+Breathing 0, so the palette fully takes over.
+
+
+5. Pick the mixer audio source
+------------------------------
+The Director listens to one OBS audio source and finds the BPM, bars,
+phrases, breakdowns and drops itself.
+1. Make sure the DJ mixer feed is an OBS audio source (for example an
+   "Audio Input Capture" named "Mixer" on the line-in the mixer is
+   plugged into). A source with "Mixer" in its name is picked
+   automatically when the filter is added.
+2. Choose it in the filter window (Audio source) or in the Music dock
+   (Audio source).
+3. The source may be muted in the OBS Audio Mixer; the Director still
+   hears it.
+4. With no audio source (or a silent feed) the Director runs at the
+   Fallback BPM: the lock stays on, nothing changes on its own, and
+   manual palette changes still work.
+5. The Director follows the level of the music: after a loud passage it
+   re-adjusts within about half a minute, and it starts fresh when you
+   pick another audio source.
+6. If drops are not detected, watch the meter in the Music dock (section
+   7):
+   - LEVEL below about -30 dBFS, or "no signal": raise Input gain
+     (Music dock, -12 to +24 dB). If it shows CLIP, lower it.
+   - The KICK light misses kicks: raise Kick sensitivity (default 60%).
+   - The KICK light keeps flashing in quiet breakdowns, so breakdowns
+     are missed: lower Kick sensitivity.
+   Kick sensitivity sets how hard a kick must hit compared with the
+   recent loudest bass: 0% = 85% of it, 60% = 40% (as in 1.0.0),
+   100% = 10%.
+
+
+6. Hotkeys
+----------
+Set them in File > Settings > Hotkeys. Each Palette Lock filter has its
+own set, labelled with the filter name in brackets. Defaults:
+
+  Force off (hold)                      F13
+  Force on (toggle)                     F14
+  Pause / resume director               F15
+  Rotate colours now                    F16
+  PANIC (toggle)                        F17
+  Next palette                          F18
+  Previous palette                      F19
+  Palette 1-8 go live                   Ctrl+1 ... Ctrl+8
+
+Palettes 9-16 have no hotkeys: tap their pads in the panel, or use
+Next / Previous palette.
+PANIC holds the lock on with the live palette and pauses the Director.
+Press PANIC again (or Pause / resume, F15) to release it: the Director
+runs again and Force on / Force off are cleared.
+
+The Music dock's clock commands have hotkeys too, registered per filter
+like the rest:
+
+  Phrase is now                         F20
+  Drop now                              F21
+  Force breakdown                       F22
+  Tap tempo                             F23
+  Lock BPM                              F24
+  Nudge beat phase back / forward       F9 / F10
+
+The Music dock buttons trigger the same actions.
+
+
+7. The Music dock
+-----------------
+Docks menu > "Music". Everything about hearing the music is here:
+
+  Clock           which Palette Lock filter the dock shows (the same list
+                  as the Palette Director panel), BPM, confidence,
+                  phrase.bar.beat, the section (GROOVE / BREAKDOWN / DROP)
+                  and how long it has held.
+  Beat lights     one per beat in the bar.
+  Meter           LEVEL is the input in dBFS after Input gain (it shows
+                  CLIP above -1 dBFS); BASS is the bass level with a red
+                  mark at the kick threshold; the KICK light flashes on
+                  every kick the Director hears. See section 5 for
+                  troubleshooting.
+  Graph           the last 64 beats: the top strip is the live palette, the
+                  band is the section, the green line is the lock, the ticks
+                  are phrases, and the white line is the bass.
+  Audio controls  Audio source, Input gain, Kick sensitivity, Fallback
+                  BPM, Phrase length. Same settings as before: an existing
+                  scene collection keeps its values.
+  Beat matching   Tap tempo, Phrase is now, Lock BPM, Nudge, Force
+                  breakdown, Drop now.
+
+  Tap tempo        sets the BPM from your taps and holds it; two or more
+                   taps inside a few seconds are averaged.
+  Lock BPM         toggles that hold: locks the clock to the running or
+                   tapped BPM instead of following the analysis.
+  "< Nudge"        shifts the beat phase a small step back.
+  "Nudge >"        shifts the beat phase a small step forward.
+                   (two arrow buttons, no numeric field.)
+  Phrase is now    re-anchors the phrase and bar to this beat, for a grid
+                   that is off by a bar.
+  Force breakdown  switches the section to BREAKDOWN now. Clip Director
+                   and Synesthesia follow, because they follow the clock.
+  Drop now         switches the section to DROP on the next beat.
+
+The buttons sit in a grid: Tap tempo, Phrase is now and Lock BPM; then
+"< Nudge", "Nudge >" and Force breakdown; then Drop now on its own row.
+
+
+8. Uninstall
+------------
+Close OBS and delete
+  C:\ProgramData\obs-studio\plugins\palette-director
+Your sets in Documents\PaletteDirector\sets\ are kept.

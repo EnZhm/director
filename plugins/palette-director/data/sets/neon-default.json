@@ -1,0 +1,221 @@
+{
+  "schema": 2,
+  "name": "Neon Default",
+  "synesthesia_playlist": "Neon Default",
+  "palettes": [
+    {
+      "name": "Neon Grid",
+      "mode": "gradient_map",
+      "colours": [
+        "#05010D",
+        "#2A0A4A",
+        "#FF00A0",
+        "#00F0FF",
+        "#E8FDFF"
+      ]
+    },
+    {
+      "name": "Outrun",
+      "mode": "gradient_map",
+      "colours": [
+        "#05010D",
+        "#2A0A4A",
+        "#9D00FF",
+        "#FF00A0",
+        "#FF5A00",
+        "#FFB000"
+      ]
+    },
+    {
+      "name": "Toxic Rain",
+      "mode": "gradient_map",
+      "colours": [
+        "#020703",
+        "#003A44",
+        "#00F0FF",
+        "#39FF14",
+        "#C6FF00"
+      ]
+    },
+    {
+      "name": "Fallout Amber",
+      "mode": "gradient_map",
+      "colours": [
+        "#0A0303",
+        "#4A0010",
+        "#FF1744",
+        "#FF5A00",
+        "#FFB000",
+        "#FFF1C9"
+      ]
+    },
+    {
+      "name": "Ice Circuit",
+      "mode": "gradient_map",
+      "colours": [
+        "#010609",
+        "#0A1F66",
+        "#2F6BFF",
+        "#00F0FF",
+        "#E8FDFF"
+      ]
+    },
+    {
+      "name": "Hologram",
+      "mode": "gradient_map",
+      "colours": [
+        "#05010D",
+        "#0A1F66",
+        "#2F6BFF",
+        "#FF4FD8",
+        "#FFD6F6"
+      ]
+    },
+    {
+      "name": "Acid House",
+      "mode": "gradient_map",
+      "colours": [
+        "#05010D",
+        "#4A0030",
+        "#FF00A0",
+        "#FFB000",
+        "#C6FF00"
+      ]
+    },
+    {
+      "name": "Ultraviolet Riot",
+      "mode": "gradient_map",
+      "colours": [
+        "#05010D",
+        "#24005C",
+        "#9D00FF",
+        "#2F6BFF",
+        "#B48CFF"
+      ]
+    },
+    {
+      "name": "Red Alert",
+      "mode": "gradient_map",
+      "colours": [
+        "#0A0303",
+        "#4A0010",
+        "#FF1744",
+        "#2F6BFF",
+        "#8FB0FF"
+      ]
+    },
+    {
+      "name": "Sodium Noir",
+      "mode": "gradient_map",
+      "colours": [
+        "#010609",
+        "#002830",
+        "#C4002E",
+        "#FF5A00",
+        "#FFB000"
+      ]
+    },
+    {
+      "name": "Chernobyl Glow",
+      "mode": "gradient_map",
+      "colours": [
+        "#020703",
+        "#0B3D1A",
+        "#39FF14",
+        "#C6FF00",
+        "#F7FFE0"
+      ]
+    },
+    {
+      "name": "Blacklight",
+      "mode": "duotone",
+      "colours": [
+        "#05010D",
+        "#FF00A0"
+      ]
+    },
+    {
+      "name": "Cold Steel",
+      "mode": "duotone",
+      "colours": [
+        "#010609",
+        "#00F0FF"
+      ]
+    },
+    {
+      "name": "Bruise",
+      "mode": "duotone",
+      "colours": [
+        "#05010D",
+        "#9D00FF"
+      ]
+    },
+    {
+      "name": "Infrared",
+      "mode": "duotone",
+      "colours": [
+        "#0A0303",
+        "#FF1744"
+      ]
+    },
+    {
+      "name": "Spectrum Fallout",
+      "mode": "gradient_map",
+      "colours": [
+        "#05010D",
+        "#9D00FF",
+        "#FF00A0",
+        "#FF1744",
+        "#FF5A00",
+        "#FFB000",
+        "#39FF14",
+        "#00F0FF"
+      ]
+    }
+  ],
+  "colour": {
+    "strength": 1.0,
+    "contrast": 1.2,
+    "keep_brightness": 0.0,
+    "input_black": 0.0,
+    "input_white": 1.0,
+    "brightness_source": "perceived"
+  },
+  "palette_changes": {
+    "trigger": "phrases",
+    "every_phrases": 8,
+    "chance": 0.25,
+    "order": "shuffle",
+    "crossfade_beats": 1,
+    "breakdown_palette": "Spectrum Fallout"
+  },
+  "director": {
+    "enabled": true,
+    "phrase_beats": 32,
+    "lock_fade_beats": 1,
+    "fallback_bpm": 132,
+    "random_off": {
+      "enabled": true,
+      "chance": 0.12,
+      "bars_min": 1,
+      "bars_max": 2,
+      "cooldown_phrases": 3
+    },
+    "off_on_breakdown": false,
+    "off_on_drop": {
+      "enabled": true,
+      "bars": 1
+    },
+    "breathing": 0.0,
+    "rotation": false,
+    "seed": 2077,
+    "input_gain_db": 0,
+    "kick_sensitivity": 0.6,
+    "drop_cycle": {
+      "enabled": true,
+      "chance": 0.5,
+      "bars": 1,
+      "rate": "1/8"
+    }
+  }
+}
