@@ -61,9 +61,10 @@ struct SchedEvent {
 	double hold_s = 0.0; // Prepare: how long the clip will be shown (wall seconds)
 	Transition transition = Transition::Cut;
 	double transition_beats = 0.0;
-	bool show_prev = false;    // StutterFlip: true = show the outgoing clip
-	bool section_edge = false; // Cut: fired by a section change, landing on section_beat
-	int64_t section_seq = 0;   // Cut: the section_seq the edge belongs to
+	bool show_prev = false;        // StutterFlip: true = show the outgoing clip
+	bool section_edge = false;     // Cut: fired by a section change, landing on section_beat
+	bool section_fallback = false; // the section edge could not use its armed deck (next bar line)
+	int64_t section_seq = 0;       // Cut: the section_seq the edge belongs to
 	std::string reason;
 };
 
@@ -90,11 +91,12 @@ private:
 	const SectionRule &rule(Section s) const;
 	double hold_seconds(Section s, double bpm) const;
 	double next_bar_at_least(double beat) const;
-	void prepare(int slot, Section s, double at, double bpm, const char *why, std::vector<SchedEvent> &out);
+	void prepare(int slot, Section s, double at, double bpm, const char *why, std::vector<SchedEvent> &out,
+		     bool fallback = false);
 	void emit(const SchedEvent &e, std::vector<SchedEvent> &out);
 	// A section edge into `sec` at `beat` (= section_beat): cut the armed deck at once when it
-	// was ready, else fall back to the next bar line.
-	void section_cut(Section sec, double beat, double now, int64_t seq, std::vector<SchedEvent> &out);
+	// was ready, else fall back to the next bar line. Returns true when it fell back.
+	bool section_cut(Section sec, double beat, double now, int64_t seq, std::vector<SchedEvent> &out);
 	// (Re)arm the decks the new section needs: a Breakdown clip while NOT Breakdown, a Drop clip
 	// while NOT Drop.
 	void arm_for(Section sec, double at, double bpm, std::vector<SchedEvent> &out);

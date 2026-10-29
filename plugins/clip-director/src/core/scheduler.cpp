@@ -74,7 +74,8 @@ void CutScheduler::emit(const SchedEvent &e, std::vector<SchedEvent> &out)
 	out.push_back(e);
 }
 
-void CutScheduler::prepare(int slot, Section s, double at, double bpm, const char *why, std::vector<SchedEvent> &out)
+void CutScheduler::prepare(int slot, Section s, double at, double bpm, const char *why, std::vector<SchedEvent> &out,
+			   bool fallback)
 {
 	SchedEvent e;
 	e.type = SchedEvent::Type::Prepare;
@@ -82,6 +83,7 @@ void CutScheduler::prepare(int slot, Section s, double at, double bpm, const cha
 	e.slot = slot;
 	e.section = s;
 	e.hold_s = hold_seconds(s, bpm);
+	e.section_fallback = fallback;
 	e.reason = why;
 	if (slot == kNext) {
 		next_section_ = s;
@@ -117,7 +119,7 @@ double CutScheduler::hold_from_section(double sb, Section sec, double now, doubl
 	return t;
 }
 
-void CutScheduler::section_cut(Section sec, double beat, double now, int64_t seq, std::vector<SchedEvent> &out)
+bool CutScheduler::section_cut(Section sec, double beat, double now, int64_t seq, std::vector<SchedEvent> &out)
 {
 	const double pre = std::max(0.0, cfg_.preroll_beats);
 	/* the armed deck for the new section, when it has had its preroll: cut at once on section_beat */
@@ -141,10 +143,11 @@ void CutScheduler::section_cut(Section sec, double beat, double now, int64_t seq
 		else
 			drop_armed_ = false;
 		next_cut_ = hold_from_section(beat, sec, now, pre);
-		return;
+		return false;
 	}
 	/* not ready (or groove): keep the existing next-bar-line rule */
-	if (sec == Section::Breakdown || sec == Section::Drop) {
+	const bool fell_back = sec == Section::Breakdown || sec == Section::Drop;
+	if (fell_back) {
 		char why[160];
 		std::snprintf(why, sizeof(why), "section -> %s seq=%lld beat=%.2f: armed deck not ready, next bar line",
 			      sec_name(sec), (long long)seq, beat);
@@ -154,6 +157,7 @@ void CutScheduler::section_cut(Section sec, double beat, double now, int64_t seq
 		next_cut_ = next_bar_at_least(now + pre);
 	else
 		next_cut_ = std::max(next_cut_, next_bar_at_least(now + pre));
+	return fell_back;
 }
 
 void CutScheduler::arm_for(Section sec, double at, double bpm, std::vector<SchedEvent> &out)
@@ -205,8 +209,8 @@ std::vector<SchedEvent> CutScheduler::tick(const ClockSample &clk)
 		last_seq_ = clk.section_seq;
 		const Section ns = clk.section;
 		section_ = ns;
-		section_cut(ns, static_cast<double>(clk.section_beat), b, clk.section_seq, out);
-		prepare(kNext, ns, b, bpm, "section change", out);
+		const bool fell_back = section_cut(ns, static_cast<double>(clk.section_beat), b, clk.section_seq, out);
+		prepare(kNext, ns, b, bpm, "section change", out, fell_back);
 		arm_for(ns, b, bpm, out);
 	}
 

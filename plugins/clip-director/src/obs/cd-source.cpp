@@ -582,6 +582,8 @@ void on_event(CdSource *c, const cd::SchedEvent &e)
 		}
 		deck_load(c, d, p);
 		c->slot_deck[e.slot] = d;
+		if (e.section_fallback) /* the section edge could not use its armed deck (spec 5) */
+			note(c, "section -> %s: armed deck not ready, next bar line", sec_name(e.section));
 		obs_log(LOG_INFO, "'%s': prepare slot %d deck %d '%s' (%s, hold %.1fs) %s",
 			obs_source_get_name(c->self), e.slot, d, clip_name(c, p.clip), sec_name(e.section), e.hold_s,
 			p.reason.c_str());

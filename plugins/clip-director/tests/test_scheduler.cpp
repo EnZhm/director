@@ -188,7 +188,11 @@ TEST_CASE("an armed deck that had less than preroll is not ready: fall back to t
 	for (const auto &c : cuts)
 		planned |= c.at_beat == 4.0 && c.section == Section::Breakdown;
 	CHECK(planned);
-	// and it says so in the scheduler log
+	// and it says so: on the OBS log via the kNext Prepare flag, and in the scheduler log
+	bool flagged = false;
+	for (const auto &e : ev)
+		flagged |= e.type == SchedEvent::Type::Prepare && e.section_fallback;
+	CHECK(flagged);
 	bool logged = false;
 	for (const auto &line : s.log())
 		logged |= line.find("armed deck not ready") != std::string::npos;
