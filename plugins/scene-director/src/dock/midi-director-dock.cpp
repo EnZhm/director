@@ -169,7 +169,8 @@ public:
 		refresh_hotkeys(true);
 		rebuild_table();
 		obs_frontend_add_save_callback(save_callback, this);
-		show_status(director_midi::available() ? no_device() : QString(obs_module_text("MidiStatus.NoBackend")));
+		show_status(director_midi::available() ? no_device()
+						       : QString(obs_module_text("MidiStatus.NoBackend")));
 	}
 
 	~MidiDirectorDock() override
