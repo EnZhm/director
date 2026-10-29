@@ -19,7 +19,8 @@ Breaking release: the plugin is renamed and the clip pipeline is gone.
   effects, the decks, thumbnails, the clip sections, the Spout-facing clip output and the
   ingest tool `tools/cd-ingest.py`.
 - **OSC removed**: the Synesthesia OSC tab, the OSC transport, the scene pools and Import
-  from Synesthesia. The source renders nothing now (`0 x 0`, no video output).
+  from Synesthesia. The source renders nothing now (`0 x 0`, no video output); filters left
+  on it from Clip Director (Spout output, shaders) still load and render nothing.
 - **Skip / Hold / Ban hotkeys removed.**
 - **New**: beat-synced **MIDI Next / Previous output**. Following Palette Director's clock,
   Scene Director sends the message when a **breakdown** starts (on the breakdown crossfade)

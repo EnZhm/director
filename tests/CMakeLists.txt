@@ -40,3 +40,10 @@ add_executable(
 target_include_directories(sd_core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/doctest)
 target_link_libraries(sd_core_tests PRIVATE sd_core)
 add_test(NAME sd_core_tests COMMAND sd_core_tests)
+
+# Static contract: a source with OBS_SOURCE_VIDEO must set video_render (see the script).
+add_test(
+  NAME source_contract
+  COMMAND
+    ${CMAKE_COMMAND} -DSRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../src -P ${CMAKE_CURRENT_SOURCE_DIR}/source_contract.cmake
+)

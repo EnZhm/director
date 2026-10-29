@@ -2,7 +2,7 @@
 Scene Director source: follows Palette Director's beat clock and sends MIDI Next / Prev to a
 virtual MIDI port, so a Synesthesia playlist switches on the beat.
 
-The source renders nothing (0 x 0, no video_render): it is the settings holder for the set. Its
+The source renders nothing (0 x 0, a no-op video_render): it is the settings holder for the set. Its
 video tick drives the scheduler, and the Scene Director dock drives the same scheduler from its
 refresh timer when the source is not being ticked (a source outside the active scene), so the
 feature works either way. The decision logic itself is pure: core/switch_sched.h.
@@ -314,6 +314,13 @@ uint32_t sd_height(void *)
 	return 0;
 }
 
+/* Draws nothing, but must exist: the source declares OBS_SOURCE_VIDEO, and libobs calls
+ * video_render without a NULL check when a filter on the source skips to its parent
+ * (obs_source_skip_video_filter -> obs_source_default_render). Collections from Clip
+ * Director 1.x can carry Spout or shader filters on this source, so a NULL here is a
+ * graphics-thread crash at startup. Keep OBS_SOURCE_VIDEO so those filters stay valid. */
+void sd_render(void *, gs_effect_t *) {}
+
 void sd_tick(void *data, float seconds)
 {
 	SdSource *c = static_cast<SdSource *>(data);
@@ -417,6 +424,7 @@ void register_source(const char *id, uint32_t extra_flags)
 	si.get_properties = sd_properties;
 	si.get_width = sd_width;
 	si.get_height = sd_height;
+	si.video_render = sd_render; /* required with OBS_SOURCE_VIDEO, see sd_render */
 	si.video_tick = sd_tick;
 	obs_register_source(&si);
 }
