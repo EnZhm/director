@@ -411,8 +411,10 @@ std::vector<ClockEvent> MusicClock::push_hop(const float *hop, std::size_t frame
 {
 	if (!impl_)
 		return {};
-	impl_->drain_enabled_ = true; // collect the events this hop produces
+	const bool prev_drain = impl_->drain_enabled_;
+	impl_->drain_enabled_ = true; // collect just the events this hop produces
 	push_audio(hop, frames, sample_rate);
+	impl_->drain_enabled_ = prev_drain;
 	std::vector<ClockEvent> evs;
 	evs.swap(impl_->out_);
 	return evs;
