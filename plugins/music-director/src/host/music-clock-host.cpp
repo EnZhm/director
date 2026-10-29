@@ -748,6 +748,8 @@ void migrate_if_needed(obs_data_t *collection)
 		return;
 
 	EnumCtx ctx;
+	/* Palette Lock filters sit on inputs AND on scenes; obs_enum_sources() lists inputs only */
+	obs_enum_scenes(enum_sources, &ctx);
 	obs_enum_sources(enum_sources, &ctx);
 	const md::Migration m = md::pick_migration(ctx.records);
 
