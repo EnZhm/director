@@ -17,6 +17,12 @@ add_library(${CMAKE_PROJECT_NAME} MODULE)
 find_package(libobs REQUIRED)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
 
+# winmm: MIDI in for MIDI Director (common/midi/director-midi.cpp). Windows only; elsewhere the
+# MIDI backend is a stub that reports no devices.
+if(WIN32)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE winmm)
+endif()
+
 if(ENABLE_FRONTEND_API)
   find_package(obs-frontend-api QUIET)
   if(TARGET OBS::obs-frontend-api)
