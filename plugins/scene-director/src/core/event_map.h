@@ -50,6 +50,7 @@ struct Mapping {
 	int offset_ms = 0;                // -500..500, added to the target time (negative = earlier)
 	bool lead = false;                // subtract the source's Scene lead (syn_lead_ms)
 	int min_interval_beats = 0;       // 0..4096, cooldown between fires (automatic section edges)
+	std::string cooldown_group;       // mappings sharing a group share one cooldown anchor (default: id)
 	bool forced_bypass = true;        // forced sections ignore the cooldown
 	int debounce_ms = 0;              // 0..5000, wall-clock minimum between fires
 	std::vector<EventAction> actions; // resolved (use expanded), 1..16

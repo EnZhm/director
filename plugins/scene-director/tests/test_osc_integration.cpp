@@ -16,6 +16,7 @@
 #include "confirm.h"
 #include "director-follow.h"
 #include "event_engine.h"
+#include "event_guard.h"
 #include "event_map.h"
 #include "osc.h"
 #include "osc-transport.h"
@@ -45,6 +46,9 @@ struct FakeSyn {
 	int feedback_port = 0;
 	std::mutex mx;
 	std::vector<std::string> received;
+	std::vector<OscMessage> messages; // full decoded messages, in arrival order
+	std::vector<uint64_t> arrived_ns; // osc_now_ns() at arrival, parallel to messages
+	std::atomic<bool> answer{true};   // false: never sends feedback (feedback loss)
 	std::atomic<bool> stop{false};
 	std::thread th;
 
@@ -72,8 +76,10 @@ struct FakeSyn {
 			{
 				std::lock_guard<std::mutex> g(mx);
 				received.push_back(m.address);
+				messages.push_back(m);
+				arrived_ns.push_back(osc_now_ns());
 			}
-			if (m.address == "/playlist/next" || m.address == "/playlist/previous") {
+			if (answer.load() && (m.address == "/playlist/next" || m.address == "/playlist/previous")) {
 				std::vector<uint8_t> echo;
 				if (osc_encode(osc_scene("fake", ""), echo))
 					out.send(echo.data(), echo.size());
@@ -82,6 +88,15 @@ struct FakeSyn {
 	}
 
 	int port() const { return in.local_port(); }
+
+	// An unsolicited datagram from Synesthesia's output (an operator changed the scene).
+	void emit(const std::vector<uint8_t> &bytes) { out.send(bytes.data(), bytes.size()); }
+
+	size_t count()
+	{
+		std::lock_guard<std::mutex> g(mx);
+		return received.size();
+	}
 
 	std::vector<std::string> snapshot()
 	{
@@ -256,5 +271,316 @@ TEST_CASE("a /scenes/x with no expectation is external and never answered")
 	CHECK(confirm.counters().external == 1);
 
 	link.stop();
+	syn.shutdown();
+}
+
+// ---- the source's per-tick pipeline, without libobs ----
+//
+// Rig mirrors SdSource's video_tick exactly: drain feedback (confirm tracker + scene_loaded into the
+// engine), engine tick with the 50 ms release horizon, per-source guard ownership, encode, and
+// send_at with the engine's osc_now_ns() deadline. Tests drive it with real time and a real
+// transport against FakeSyn.
+namespace {
+
+struct Rig {
+	EventEngine eng;
+	ConfirmTracker confirm{2000};
+	director_follow::Follower follower;
+	SourceClaims claims;
+	EventGuard *guard;
+	OscTransport link;
+	std::vector<QueuedEvent> queued;
+	std::vector<ConfirmEvent> confirm_log;
+	int sends = 0;
+	int64_t confirm_timeout_ms = 2000;
+
+	Rig(const EventMap &map, EventGuard &g) : eng(map, 0.0), guard(&g) { eng.set_release_horizon_ms(50.0); }
+
+	bool start(int send_port, int feedback_port, std::string *err)
+	{
+		return link.start("127.0.0.1", send_port, feedback_port, err);
+	}
+
+	void drain(int64_t now)
+	{
+		std::vector<uint8_t> raw;
+		while (link.pop(raw)) {
+			confirm.on_datagram(now);
+			OscMessage m;
+			if (!osc_decode(raw, m))
+				continue;
+			if (m.address.rfind("/scenes/", 0) == 0 && m.address.size() > 8) {
+				const std::string name = m.address.substr(8);
+				for (ConfirmEvent &ev : confirm.on_scene(name, now))
+					confirm_log.push_back(std::move(ev));
+				QueuedEvent q;
+				q.kind = QueuedEvent::Kind::SceneLoaded;
+				q.scene = name;
+				queued.push_back(std::move(q));
+			}
+		}
+	}
+
+	void tick(const ClockSample &clk)
+	{
+		const int64_t now = (int64_t)osc_now_ns();
+		drain(now);
+		for (ConfirmEvent &ev : confirm.tick(now))
+			confirm_log.push_back(std::move(ev));
+		const director_follow::Edges e = follower.update(follow_sample(clk));
+		std::vector<QueuedEvent> q;
+		q.swap(queued);
+		for (PlannedSend &p : eng.tick(clk, e, q, now)) {
+			if (!claims.may_send(*guard, p.event, p.key))
+				continue;
+			OscMessage msg;
+			msg.address = p.route;
+			std::vector<std::string> args;
+			for (const EventArg &a : p.args) {
+				if (a.type == EventArg::Type::Int) {
+					msg.add(a.i);
+					args.push_back(std::to_string(a.i));
+				} else if (a.type == EventArg::Type::Float) {
+					msg.add(a.f);
+					args.push_back(std::to_string(a.f));
+				} else {
+					msg.add(a.s);
+					args.push_back(a.s);
+				}
+			}
+			std::vector<uint8_t> wire;
+			REQUIRE(osc_encode(msg, wire));
+			const uint64_t deadline = p.has_send_at_ns ? (uint64_t)p.send_at_ns : osc_now_ns();
+			REQUIRE(link.send_at(wire.data(), wire.size(), deadline));
+			for (ConfirmEvent &ev : confirm.on_sent(p.route, args, now, confirm_timeout_ms))
+				confirm_log.push_back(std::move(ev));
+			++sends;
+		}
+	}
+};
+
+// A real-time clock at `bpm`: beats advance with osc_now_ns() from `start_beat`.
+struct LiveClock {
+	uint64_t t0 = osc_now_ns();
+	double start_beat = 0.0;
+	double bpm = 120.0;
+	double beats() const { return start_beat + (double)(osc_now_ns() - t0) / 1e9 * bpm / 60.0; }
+	uint64_t ns_at(double beat) const { return t0 + (uint64_t)((beat - start_beat) * 60.0 / bpm * 1e9); }
+};
+
+ClockSample live_sample(const LiveClock &lc, Section sec, int64_t seq, int64_t section_beat, int64_t epoch = 0)
+{
+	Sample s{lc.beats(), sec, seq, section_beat, false, epoch};
+	ClockSample c = s.to_clock();
+	c.bpm = lc.bpm;
+	return c;
+}
+
+bool wait_for(FakeSyn &syn, size_t n, int ms)
+{
+	const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+	while (std::chrono::steady_clock::now() < until) {
+		if (syn.count() >= n)
+			return true;
+		std::this_thread::sleep_for(std::chrono::milliseconds(2));
+	}
+	return syn.count() >= n;
+}
+
+} // namespace
+
+TEST_CASE("deadline order: distinguishable sends released together leave in deadline order, on time")
+{
+	// Three mappings on the same drop, enqueued in file order A, B, C, with offsets that put
+	// their deadlines in the order B (0 ms), C (+20 ms), A (+40 ms). All three fall inside the
+	// 50 ms release horizon on the same tick, so the transport -- not the engine -- orders them.
+	std::string err;
+	const int fb = reserve_free_port();
+	FakeSyn syn;
+	REQUIRE(syn.start(fb, &err));
+	syn.answer.store(false);
+	EventGuard guard;
+	EventMap map;
+	REQUIRE(map.parse(R"({"version":1,"mappings":[
+	  {"id":"a","event":"drop","offset_ms":40,"actions":[{"route":"/playlist/position","args":[{"int":1}]}]},
+	  {"id":"b","event":"drop","offset_ms":0,"actions":[{"route":"/playlist/position","args":[{"int":2}]}]},
+	  {"id":"c","event":"drop","offset_ms":20,"actions":[{"route":"/playlist/position","args":[{"int":3}]}]}]})")
+			.syntax_ok);
+	REQUIRE(map.mappings().size() == 3);
+	Rig rig(map, guard);
+	REQUIRE(rig.start(syn.port(), fb, &err));
+
+	LiveClock lc;
+	lc.start_beat = 60.0;
+	rig.tick(live_sample(lc, Section::Groove, 0, 0));
+	// the drop edge arrives with its downbeat at beat 61 (500 ms ahead at 120 BPM): ~16 ms ticks
+	while (lc.beats() < 61.2) {
+		rig.tick(live_sample(lc, Section::Drop, 1, 61));
+		std::this_thread::sleep_for(std::chrono::milliseconds(16));
+	}
+	REQUIRE(wait_for(syn, 3, 1000));
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+	std::vector<OscMessage> got;
+	std::vector<uint64_t> at;
+	{
+		std::lock_guard<std::mutex> g(syn.mx);
+		got = syn.messages;
+		at = syn.arrived_ns;
+	}
+	REQUIRE(got.size() == 3); // exactly once each, across ~75 ticks
+	REQUIRE(got[0].args.size() == 1);
+	CHECK(got[0].args[0].i == 2);
+	CHECK(got[1].args[0].i == 3);
+	CHECK(got[2].args[0].i == 1);
+
+	// each landed no earlier than its deadline and within 25 ms of it (loopback, idle box)
+	const uint64_t downbeat = lc.ns_at(61.0);
+	const int64_t offs[3] = {0, 20, 40};
+	for (int i = 0; i < 3; ++i) {
+		const double late_ms = ((double)at[(size_t)i] - (double)(downbeat + (uint64_t)offs[i] * 1000000)) / 1e6;
+		INFO("send " << i << " late by " << late_ms << " ms");
+		CHECK(late_ms >= -1.0);
+		CHECK(late_ms < 25.0);
+	}
+	rig.link.stop();
+	syn.shutdown();
+}
+
+TEST_CASE("the drop send lands on the beat, not on the next video frame")
+{
+	// 30 fps ticks (33 ms) with the 50 ms horizon: the send is released on the frame before the
+	// downbeat and held to it, so it is never a frame late.
+	std::string err;
+	const int fb = reserve_free_port();
+	FakeSyn syn;
+	REQUIRE(syn.start(fb, &err));
+	syn.answer.store(false);
+	EventGuard guard;
+	Rig rig(EventMap::defaults_seeded(true, true, 0), guard);
+	REQUIRE(rig.start(syn.port(), fb, &err));
+	LiveClock lc;
+	lc.start_beat = 30.0;
+	rig.tick(live_sample(lc, Section::Groove, 0, 0));
+	while (lc.beats() < 31.3) {
+		rig.tick(live_sample(lc, Section::Drop, 1, 31));
+		std::this_thread::sleep_for(std::chrono::milliseconds(33));
+	}
+	REQUIRE(wait_for(syn, 1, 1000));
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	REQUIRE(syn.count() == 1);
+	uint64_t at;
+	{
+		std::lock_guard<std::mutex> g(syn.mx);
+		at = syn.arrived_ns[0];
+	}
+	const double late_ms = ((double)at - (double)lc.ns_at(31.0)) / 1e6;
+	INFO("late by " << late_ms << " ms");
+	CHECK(late_ms >= -1.0);
+	CHECK(late_ms < 15.0);
+	rig.link.stop();
+	syn.shutdown();
+}
+
+TEST_CASE("two sources on one guard: a multi-action drop goes out once, all actions, from one source")
+{
+	std::string err;
+	const int fb1 = reserve_free_port();
+	const int fb2 = reserve_free_port();
+	REQUIRE(fb1 != fb2);
+	FakeSyn syn;
+	REQUIRE(syn.start(fb1, &err));
+	syn.answer.store(false);
+	EventGuard guard;
+	EventMap map;
+	REQUIRE(map.parse(R"({"version":1,"mappings":[
+	  {"id":"drop-two","event":"drop","actions":[{"route":"/playlist/next"},
+	   {"route":"/playlist/position","args":[{"int":9}]}]},
+	  {"id":"drop-extra","event":"drop","actions":[{"route":"/render/enabled","args":[{"int":1}]}]}]})")
+			.syntax_ok);
+	Rig a(map, guard), b(map, guard);
+	REQUIRE(a.start(syn.port(), fb1, &err));
+	REQUIRE(b.start(syn.port(), fb2, &err));
+	LiveClock lc;
+	lc.start_beat = 10.0;
+	a.tick(live_sample(lc, Section::Groove, 0, 0));
+	b.tick(live_sample(lc, Section::Groove, 0, 0));
+	for (int i = 0; i < 6; ++i) { // the same edge polled repeatedly by both, interleaved
+		a.tick(live_sample(lc, Section::Drop, 1, 10));
+		b.tick(live_sample(lc, Section::Drop, 1, 10));
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	REQUIRE(wait_for(syn, 3, 1000));
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	CHECK(syn.count() == 3);       // 3 actions, once -- not 1 (split ownership), not 6 (both)
+	CHECK(a.sends + b.sends == 3); // and one source sent all three
+	CHECK((a.sends == 3 || b.sends == 3));
+	a.link.stop();
+	b.link.stop();
+	syn.shutdown();
+}
+
+TEST_CASE("an external scene change is logged and never answered (0 datagrams to Synesthesia)")
+{
+	std::string err;
+	const int fb = reserve_free_port();
+	FakeSyn syn;
+	REQUIRE(syn.start(fb, &err));
+	EventGuard guard;
+	Rig rig(EventMap::defaults(), guard); // the shipped defaults
+	REQUIRE(rig.start(syn.port(), fb, &err));
+	LiveClock lc;
+	rig.tick(live_sample(lc, Section::Groove, 0, 0));
+
+	// The operator changes the scene on Synesthesia's own controller: /scenes/elsewhere arrives
+	// on the feedback port with nothing pending.
+	std::vector<uint8_t> wire;
+	REQUIRE(osc_encode(osc_scene("elsewhere", ""), wire));
+	syn.emit(wire);
+	// run the full pipeline for 500 ms of ticks
+	const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+	while (std::chrono::steady_clock::now() < until) {
+		rig.tick(live_sample(lc, Section::Groove, 0, 0));
+		std::this_thread::sleep_for(std::chrono::milliseconds(16));
+	}
+	const ConfirmCounters cc = rig.confirm.counters();
+	CHECK(cc.external == 1);
+	CHECK(cc.confirmed == 0);
+	CHECK(rig.sends == 0);
+	CHECK(rig.link.sent() == 0u);
+	CHECK(syn.count() == 0); // Scene Director never fights an external change
+	rig.link.stop();
+	syn.shutdown();
+}
+
+TEST_CASE("feedback loss: a missed confirmation is counted, and the next drop still sends")
+{
+	std::string err;
+	const int fb = reserve_free_port();
+	FakeSyn syn;
+	REQUIRE(syn.start(fb, &err));
+	syn.answer.store(false); // Synesthesia drops its feedback (seen on the show rig)
+	EventGuard guard;
+	EventMap map = EventMap::defaults_seeded(true, true, 0);
+	Rig rig(map, guard);
+	rig.confirm_timeout_ms = 150; // short timeout so the test is quick
+	REQUIRE(rig.start(syn.port(), fb, &err));
+	LiveClock lc;
+	lc.start_beat = 0.0;
+	rig.tick(live_sample(lc, Section::Groove, 0, 0));
+	rig.tick(live_sample(lc, Section::Drop, 1, 0));
+	REQUIRE(wait_for(syn, 1, 500));
+	const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+	while (std::chrono::steady_clock::now() < until) {
+		rig.tick(live_sample(lc, Section::Drop, 1, 0));
+		std::this_thread::sleep_for(std::chrono::milliseconds(16));
+	}
+	// the next section edge is not held back by the unconfirmed one
+	rig.tick(live_sample(lc, Section::Breakdown, 2, (int64_t)lc.beats()));
+	REQUIRE(wait_for(syn, 2, 500));
+	CHECK(syn.count() == 2);
+	rig.tick(live_sample(lc, Section::Breakdown, 2, (int64_t)lc.beats()));
+	CHECK(rig.confirm.counters().missed >= 1);
+	rig.link.stop();
 	syn.shutdown();
 }

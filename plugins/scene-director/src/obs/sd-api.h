@@ -38,6 +38,13 @@ struct Status {
 	// the shared event map
 	std::string map_path;
 	std::string map_summary;
+	struct MappingInfo {
+		std::string id;
+		std::string event;
+		bool enabled = true;
+		int min_interval_beats = 0;
+	};
+	std::vector<MappingInfo> mappings; // every loaded mapping, in file order (the dock's toggles)
 
 	uint64_t log_seq = 0;         // number of log lines ever written
 	std::vector<std::string> log; // the newest lines (up to 200), oldest first

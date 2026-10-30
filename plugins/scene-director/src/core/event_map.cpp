@@ -436,6 +436,17 @@ bool valid_event(const std::string &s)
 	return false;
 }
 
+// cooldown_group: 1..32 characters of a-z, 0-9, '-' or '_'.
+bool valid_group(const std::string &s)
+{
+	if (s.empty() || s.size() > 32)
+		return false;
+	for (const char c : s)
+		if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_'))
+			return false;
+	return true;
+}
+
 bool is_section_event(const std::string &s)
 {
 	return s == "breakdown" || s == "drop" || s == "groove" || s == "section";
@@ -595,6 +606,7 @@ EventMap EventMap::defaults()
       "offset_ms": 0,
       "lead": true,
       "min_interval_beats": 16,
+      "cooldown_group": "scene",
       "forced_bypass": true,
       "debounce_ms": 0,
       "actions": [
@@ -609,6 +621,7 @@ EventMap EventMap::defaults()
       "offset_ms": 0,
       "lead": true,
       "min_interval_beats": 16,
+      "cooldown_group": "scene",
       "forced_bypass": true,
       "debounce_ms": 0,
       "actions": [
@@ -621,6 +634,7 @@ EventMap EventMap::defaults()
       "enabled": true,
       "quantize": "now",
       "debounce_ms": 150,
+      "cooldown_group": "scene",
       "actions": [
         { "route": "/playlist/next" }
       ]
@@ -631,6 +645,7 @@ EventMap EventMap::defaults()
       "enabled": true,
       "quantize": "now",
       "debounce_ms": 150,
+      "cooldown_group": "scene",
       "actions": [
         { "route": "/playlist/previous" }
       ]
@@ -765,6 +780,17 @@ EventMap::ParseResult EventMap::parse(const std::string &text)
 		if (!bad && !read_int(mn.get("min_interval_beats"), 0, 0, 4096, "min_interval_beats",
 				      m.min_interval_beats, reason))
 			bad = true;
+		if (!bad) {
+			const JNode *gn = mn.get("cooldown_group");
+			if (!gn) {
+				m.cooldown_group = m.id;
+			} else if (gn->type != JType::String || !valid_group(gn->str)) {
+				reason = "cooldown_group must be 1..32 characters of a-z, 0-9, '-' or '_'";
+				bad = true;
+			} else {
+				m.cooldown_group = gn->str;
+			}
+		}
 		if (!bad && !read_bool(mn.get("forced_bypass"), true, "forced_bypass", m.forced_bypass, reason))
 			bad = true;
 		if (!bad && !read_int(mn.get("debounce_ms"), 0, 0, 5000, "debounce_ms", m.debounce_ms, reason))

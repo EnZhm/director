@@ -74,6 +74,7 @@ struct SdSource {
 	std::unique_ptr<director_osc::OscTransport> osc;
 	director_follow::Follower follower;
 	cd::ConfirmTracker confirm;
+	cd::SourceClaims claims; // the events this source owns in the process-wide guard
 
 	double beats = 0.0, bpm = 128.0;
 	bool clock_ok = false, clock_state_known = false;
@@ -203,18 +204,6 @@ void map_init()
 		g_map_loaded = true; // else: first source seeds + writes below
 }
 
-/* g_map_mx held briefly: copy the current map, then hand it to one source's engine. */
-void adopt_map(SdSource *c)
-{
-	cd::EventMap m;
-	{
-		std::lock_guard<std::mutex> g(g_map_mx);
-		m = g_map;
-	}
-	std::lock_guard<std::mutex> cg(c->mx);
-	c->engine->set_map(m);
-}
-
 /* ------------------------------------------------------------------------- */
 /* logging                                                                    */
 
@@ -270,6 +259,7 @@ bool section_event(const std::string &e)
  * Director is not loaded (no free-running fallback: the engine idles). */
 void read_clock(SdSource *c, double seconds, cd::ClockSample &out)
 {
+	(void)seconds; /* frame length no longer matters: sends are deadline-scheduled */
 	director_clock k = {};
 	const bool ok = director_clock_read(&k);
 	if (ok) {
@@ -289,9 +279,8 @@ void read_clock(SdSource *c, double seconds, cd::ClockSample &out)
 	out.beat = k.beat;
 	out.phrase = k.phrase;
 	out.phrase_beat = k.phrase_beat;
-	/* half a frame of lookahead: a switch fires on the frame nearest its beat, not the first one
-	 * after */
-	out.beats = c->beats + (ok ? 0.5 * std::clamp(seconds, 0.0, 0.05) * c->bpm / 60.0 : 0.0);
+	/* No frame lookahead: the engine releases a plan up to 50 ms before its send time and the
+	 * transport holds it to its deadline (spec 4.5), so sends land on time, not on a frame. */
 	out.valid = ok;
 }
 
@@ -357,17 +346,10 @@ void send_plan(SdSource *c, const cd::PlannedSend &p, int64_t now_ns)
 		return;
 	}
 
-	/* The send leaves when the clock reaches send_at_beats. The engine only returns a plan once
-	 * its send time has arrived (or is within a frame of it), so the remaining time is ~0 and the
-	 * deadline is now -- but compute it from the beat distance anyway so a lead / offset that lands
-	 * slightly ahead still schedules correctly. Deadlines are osc_now_ns() domain, never
-	 * os_gettime_ns(). */
-	uint64_t deadline = director_osc::osc_now_ns();
-	const double remaining = p.send_at_beats - c->beats;
-	if (remaining > 0) {
-		const double secs = remaining * 60.0 / std::max(1.0, c->bpm);
-		deadline += (uint64_t)(secs * 1e9);
-	}
+	/* The engine released this plan at most 50 ms (the release horizon) before its send time and
+	 * stamped the absolute deadline in the osc_now_ns() domain (now_ns is osc_now_ns()); the
+	 * transport's sender thread holds the datagram until then (spec 4.5). */
+	const uint64_t deadline = p.has_send_at_ns ? (uint64_t)p.send_at_ns : director_osc::osc_now_ns();
 
 	if (!c->osc->send_at(wire.data(), wire.size(), deadline)) {
 		c->confirm.set_error(true);
@@ -460,10 +442,11 @@ void drive_locked(SdSource *c, double seconds)
 		plans = c->engine->tick(clk, {}, queued, now_ns); /* manual events still send without MD */
 
 	for (const cd::PlannedSend &p : plans) {
-		/* exactly-once across every Scene Director source: manual events carry an empty key and
-		 * never go through the guard. */
-		if (!p.key.empty() && !g_guard.claim(p.event, p.key)) {
-			obs_log(LOG_DEBUG, "'%s': %s key %s already claimed by another source; skip",
+		/* exactly-once across every Scene Director source: the first source to claim an event owns
+		 * it and sends ALL of its own plans for it (several actions / mappings); other sources skip.
+		 * Manual presses and scene_loaded carry an empty key and are always this source's own. */
+		if (!c->claims.may_send(g_guard, p.event, p.key)) {
+			obs_log(LOG_DEBUG, "'%s': %s key %s owned by another source; skip",
 				obs_source_get_name(c->self), p.event.c_str(), p.key.c_str());
 			continue;
 		}
@@ -517,26 +500,25 @@ void log_migration(SdSource *c, const cd::SourceConfig &n)
 		return;
 	c->migration_logged = true;
 	const char *name = obs_source_get_name(c->self);
-	if (n.osc_seeded)
-		obs_log(LOG_INFO, "[scene-director] '%s': OSC ports from Clip Director 1.1 settings: %s %d/%d", name,
-			n.osc_host.c_str(), n.osc_send_port, n.osc_feedback_port);
+	/* the syn_* -> osc_* seeding is persisted and logged by persist_seeded_osc() in create */
 	if (n.midi_out_present)
 		obs_log(LOG_INFO,
 			"[scene-director] '%s': MIDI out was removed in 2.1; Synesthesia is driven over OSC (%s:%d)",
 			name, n.osc_host.c_str(), n.osc_send_port);
 }
 
-/* mx held: (re)start the transport when host/ports changed or it is not running. Called only from
- * create/update (UI thread), never from video_tick (spec 4.5). */
-void restart_transport(SdSource *c)
+/* mx held: does the transport need a (re)start for the current config? */
+bool transport_stale(const SdSource *c)
 {
-	const bool need = !c->osc || !c->osc->running() || c->osc_host != c->cfg.osc_host ||
-			  c->osc_send_port != c->cfg.osc_send_port || c->osc_feedback_port != c->cfg.osc_feedback_port;
-	if (!need)
-		return;
-	if (c->osc)
-		c->osc->stop();
+	return !c->osc || !c->osc->running() || c->osc_host != c->cfg.osc_host ||
+	       c->osc_send_port != c->cfg.osc_send_port || c->osc_feedback_port != c->cfg.osc_feedback_port;
+}
+
+/* mx held: start a fresh transport for the current config. */
+void start_transport_locked(SdSource *c)
+{
 	c->osc = std::make_unique<director_osc::OscTransport>();
+	c->last_dropped = 0;
 	std::string err;
 	if (!c->osc->start(c->cfg.osc_host, c->cfg.osc_send_port, c->cfg.osc_feedback_port, &err)) {
 		obs_log(LOG_WARNING, "'%s': OSC transport: %s", obs_source_get_name(c->self), err.c_str());
@@ -544,6 +526,7 @@ void restart_transport(SdSource *c)
 		c->confirm.set_error(true);
 		return;
 	}
+	c->confirm.set_error(false);
 	c->osc_host = c->cfg.osc_host;
 	c->osc_send_port = c->cfg.osc_send_port;
 	c->osc_feedback_port = c->cfg.osc_feedback_port;
@@ -551,14 +534,29 @@ void restart_transport(SdSource *c)
 		c->cfg.osc_send_port, c->cfg.osc_feedback_port);
 }
 
+/* Applies settings. The transport is (re)started only from create/update (UI thread), never from
+ * video_tick (spec 4.5). A running transport is stopped OUTSIDE mx: stop() joins two threads (up to
+ * ~250 ms) and must never hold up video_tick, which takes the same mutex. The old transport is
+ * stopped before the new one starts so the feedback port is free to bind again; sends planned in
+ * that short window are logged as dropped. */
 void apply(SdSource *c, obs_data_t *settings)
 {
 	const cd::SourceConfig n = read_settings(settings);
+	std::unique_ptr<director_osc::OscTransport> old;
+	{
+		std::lock_guard<std::mutex> g(c->mx);
+		c->cfg = n;
+		c->engine->set_lead_ms(n.lead_ms);
+		log_migration(c, n);
+		if (!transport_stale(c))
+			return;
+		old = std::move(c->osc); /* c->osc is null until restarted: drain/send skip it */
+	}
+	if (old)
+		old->stop();
 	std::lock_guard<std::mutex> g(c->mx);
-	c->cfg = n;
-	c->engine->set_lead_ms(n.lead_ms);
-	log_migration(c, n);
-	restart_transport(c);
+	if (transport_stale(c))
+		start_transport_locked(c);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -569,25 +567,45 @@ const char *sd_name(void *)
 	return obs_module_text("SceneDirector");
 }
 
+/* Migration (spec 4.1): when osc_* are absent and Clip Director 1.1's syn_* are present, the
+ * seeded values are written into the source's own settings (only the absent osc_* keys; syn_* stay
+ * verbatim), so the properties dialog shows what the transport uses and later edits start from
+ * them. Logged once, here. */
+void persist_seeded_osc(obs_source_t *source, obs_data_t *settings)
+{
+	const cd::SourceConfig n = read_settings(settings);
+	if (!n.osc_seeded)
+		return;
+	if (!obs_data_has_user_value(settings, "osc_host"))
+		obs_data_set_string(settings, "osc_host", n.osc_host.c_str());
+	if (!obs_data_has_user_value(settings, "osc_send_port"))
+		obs_data_set_int(settings, "osc_send_port", n.osc_send_port);
+	if (!obs_data_has_user_value(settings, "osc_feedback_port"))
+		obs_data_set_int(settings, "osc_feedback_port", n.osc_feedback_port);
+	obs_log(LOG_INFO, "[scene-director] '%s': OSC ports from Clip Director 1.1 settings: %s %d/%d",
+		obs_source_get_name(source), n.osc_host.c_str(), n.osc_send_port, n.osc_feedback_port);
+}
+
 void *sd_create(obs_data_t *settings, obs_source_t *source)
 {
 	SdSource *c = new SdSource();
 	c->self = source;
 	c->engine = std::make_unique<cd::EventEngine>(cd::EventMap::defaults(), 0.0);
-	c->osc = std::make_unique<director_osc::OscTransport>();
+	c->engine->set_release_horizon_ms(50.0); /* spec 4.5: release within 50 ms, deadline-scheduled */
+	persist_seeded_osc(source, settings);
 	apply(c, settings);
 
-	/* first-run seeding: the first source to arrive writes the seeded default map (spec 4.3). */
+	/* Register and adopt the map under g_map_mx (lock order g_map_mx -> g_sources_mx -> c->mx), so a
+	 * reload or a dock toggle can never fall between adopting the map and joining g_sources. The
+	 * first source to arrive writes the seeded default map (spec 4.3). */
 	{
-		std::lock_guard<std::mutex> g(g_map_mx);
+		std::lock_guard<std::mutex> mg(g_map_mx);
 		if (!g_map_loaded)
 			map_seed_locked(c->cfg.trigger_breakdown, c->cfg.trigger_drop, c->cfg.cooldown_beats);
-	}
-	adopt_map(c);
-
-	{
-		std::lock_guard<std::mutex> g(g_sources_mx);
+		std::lock_guard<std::mutex> sg(g_sources_mx);
 		g_sources.push_back(c);
+		std::lock_guard<std::mutex> cg(c->mx);
+		c->engine->set_map(g_map);
 	}
 	obs_log(LOG_INFO, "'%s': source ready (renders nothing: it drives Synesthesia over OSC)",
 		obs_source_get_name(source));
@@ -601,10 +619,13 @@ void sd_destroy(void *data)
 		std::lock_guard<std::mutex> g(g_sources_mx);
 		g_sources.erase(std::remove(g_sources.begin(), g_sources.end(), c), g_sources.end());
 	}
+	std::unique_ptr<director_osc::OscTransport> osc;
 	{
 		std::lock_guard<std::mutex> g(c->mx);
-		c->osc->stop(); /* stop the transport before anything else is freed (spec 4.5) */
+		osc = std::move(c->osc);
 	}
+	if (osc)
+		osc->stop(); /* stop the transport before anything else is freed (spec 4.5) */
 	delete c;
 }
 
@@ -724,6 +745,14 @@ bool status(obs_source_t *src, Status &o)
 		std::lock_guard<std::mutex> g(g_map_mx);
 		o.map_path = g_map_path;
 		o.map_summary = g_map_summary;
+		for (const cd::Mapping &m : g_map.mappings()) {
+			Status::MappingInfo mi;
+			mi.id = m.id;
+			mi.event = m.event;
+			mi.enabled = m.enabled;
+			mi.min_interval_beats = m.min_interval_beats;
+			o.mappings.push_back(std::move(mi));
+		}
 	}
 	std::lock_guard<std::mutex> g(c->mx);
 	o.clock_following = c->clock_ok;
