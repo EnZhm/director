@@ -23,6 +23,7 @@ add_library(
   ${DIRECTOR_MIDI}/midi_msg.cpp
   ${SD_CORE}/settings.cpp
   ${SD_CORE}/switch_sched.cpp
+  ${SD_CORE}/confirm.cpp
 )
 target_include_directories(sd_core PUBLIC ${SD_CORE} ${DIRECTOR_MIDI} ${DIRECTOR_COMMON} ${DIRECTOR_INCLUDE})
 target_link_libraries(sd_core PUBLIC Threads::Threads)
@@ -37,6 +38,7 @@ add_executable(
   doctest_main.cpp
   test_settings.cpp
   test_switch_sched.cpp
+  test_confirm.cpp
   test_follow_script.cpp
   test_seq_guard.cpp
 )
