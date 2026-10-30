@@ -19,6 +19,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "host/music-clock-host.h"
 
 #include <media-io/audio-io.h>
+#include <obs-module.h>
 #include <util/platform.h>
 #include <util/util_uint64.h>
 
@@ -38,6 +39,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <plugin-support.h>
 
 #include "director/clock_api.h"
+#include "director/midi_legacy.h"
 #include "director/migration.h"
 #include "obs/md-hotkeys.h"
 
@@ -194,6 +196,10 @@ std::string g_migration_note; // "<filter> on <source>" after a migration, else 
 
 #if defined(ENABLE_FRONTEND_API)
 obs_data_t *g_collection = nullptr; // strong ref to the current scene collection's data
+
+// MIDI Director (removed in 2.1, spec 6.3): its saved mappings stay in the collection, untouched.
+constexpr const char *kCollectionKeyMidiDirector = "midi_director";
+md::LegacyMidiStore g_legacy_midi; // UI thread only (frontend save callback)
 #endif
 
 /* ------------------------------------------------------------------------- */
@@ -794,14 +800,54 @@ void migrate_if_needed(obs_data_t *collection)
 			obs_source_release(f);
 }
 
+// Spec 6.3: once per collection and session, say that the kept MIDI Director mappings are
+// inactive, write a JSON copy once, and give one rebind hint per mapped target.
+void report_legacy_midi()
+{
+	if (!g_legacy_midi.present())
+		return;
+	const md::LegacyMidi legacy = md::parse_legacy_midi(g_legacy_midi.raw());
+	if (legacy.mappings.empty())
+		return;
+	char *name = obs_frontend_get_current_scene_collection();
+	const std::string collection = name ? name : "";
+	bfree(name);
+	if (!g_legacy_midi.first_report(collection))
+		return;
+
+	std::string copy_path;
+	char *dir = obs_module_config_path("");
+	if (dir) {
+		os_mkdirs(dir);
+		bfree(dir);
+	}
+	char *path = obs_module_config_path(md::legacy_copy_name(collection).c_str());
+	if (path) {
+		copy_path = path;
+		if (!os_file_exists(path) &&
+		    !os_quick_write_utf8_file(path, g_legacy_midi.raw().c_str(), g_legacy_midi.raw().size(), false))
+			obs_log(LOG_WARNING, "could not write the MIDI Director copy to %s", path);
+		bfree(path);
+	}
+	obs_log(LOG_INFO, "%s", md::removal_line(legacy.mappings.size(), copy_path).c_str());
+	for (const md::LegacyMapping &m : legacy.mappings)
+		obs_log(LOG_INFO, "%s", md::rebind_line(m).c_str());
+}
+
 void frontend_save(obs_data_t *save_data, bool saving, void *)
 {
 	if (!save_data)
 		return;
 	if (saving) {
 		write_settings(save_data);
+		// Written back verbatim: OBS rebuilds the save data from callbacks, so an unwritten key
+		// would be dropped from the collection.
+		if (g_legacy_midi.present())
+			obs_data_set_string(save_data, kCollectionKeyMidiDirector, g_legacy_midi.raw().c_str());
 		return;
 	}
+	g_legacy_midi.load(obs_data_get_string(save_data, kCollectionKeyMidiDirector));
+	report_legacy_midi();
 	if (g_collection != save_data) {
 		obs_data_release(g_collection);
 		g_collection = save_data;

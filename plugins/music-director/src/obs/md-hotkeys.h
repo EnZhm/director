@@ -17,10 +17,8 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
 /* Music Director hotkeys: md_phrase_now, md_drop_now, md_force_breakdown, md_tap_tempo, md_lock_bpm,
- * md_nudge_back, md_nudge_fwd as OBS frontend hotkeys, plus the listing and triggering helpers the
- * MIDI Director dock uses to drive ANY registered hotkey by identity (music, palette, clips,
- * Synesthesia). The list/trigger helpers are a no-op-free part of the core API; registering the md_*
- * hotkeys needs the frontend API. */
+ * md_nudge_back, md_nudge_fwd as OBS frontend hotkeys (Settings > Hotkeys, or Stream Deck's OBS
+ * hotkey action). The name table is director/hotkey_names.h; registering needs the frontend API. */
 
 #pragma once
 
@@ -36,33 +34,9 @@ void music_director_hotkey_unload(void);
 
 #include <obs.h>
 
-#include <string>
-#include <vector>
+#include "director/hotkey_names.h"
 
 namespace mdhotkey {
-
-// Stable hotkey names: MIDI mappings are saved with them, so they never change.
-constexpr const char *kPhraseNow = "md_phrase_now";
-constexpr const char *kDropNow = "md_drop_now";
-constexpr const char *kForceBreakdown = "md_force_breakdown";
-constexpr const char *kTapTempo = "md_tap_tempo";
-constexpr const char *kLockBpm = "md_lock_bpm";
-constexpr const char *kNudgeBack = "md_nudge_back";
-constexpr const char *kNudgeFwd = "md_nudge_fwd";
-
-// A hotkey identity as the MIDI Director dock stores it (mirrors cd::midi::Target).
-struct Entry {
-	std::string name;            // hotkey name, e.g. "md_drop_now"
-	std::string registerer;      // "frontend", "source", "output", "encoder", "service"
-	std::string registerer_name; // source name for source-level hotkeys, empty otherwise
-	std::string description;     // localised description shown in the picker
-};
-
-// Every hotkey OBS currently knows about, sorted for the picker.
-std::vector<Entry> list();
-
-// Triggers one hotkey by identity (re-resolved against the live list). False when no hotkey matches.
-bool trigger(const Entry &entry, bool pressed);
 
 // Migration (spec 3.1 step 4): copy one bound clock hotkey from a Palette Lock filter's
 // hotkey_bindings ("pd_*") onto the matching md_*. False when the pd_* name is not a clock hotkey.

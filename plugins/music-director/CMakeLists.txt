@@ -6,7 +6,6 @@ project(${_name} VERSION ${_version})
 
 option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
 option(ENABLE_QT "Use Qt functionality" ON)
-option(MD_TEST_HOOKS "Compile the MIDI dock sandbox test hooks; never in releases" OFF)
 
 include(compilerconfig)
 include(defaults)
@@ -16,12 +15,6 @@ add_library(${CMAKE_PROJECT_NAME} MODULE)
 
 find_package(libobs REQUIRED)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
-
-# winmm: MIDI in for MIDI Director (common/midi/director-midi.cpp). Windows only; elsewhere the
-# MIDI backend is a stub that reports no devices.
-if(WIN32)
-  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE winmm)
-endif()
 
 if(ENABLE_FRONTEND_API)
   find_package(obs-frontend-api QUIET)
@@ -47,9 +40,8 @@ if(ENABLE_QT)
   )
 endif()
 
-# The one clock contract and the shared MIDI helper live at the repo root.
+# The one clock contract lives at the repo root.
 set(MD_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
-set(MD_MIDI "${MD_ROOT}/common/midi")
 
 target_sources(
   ${CMAKE_PROJECT_NAME}
@@ -62,19 +54,15 @@ target_sources(
     src/director/beat_tracker.cpp
     src/director/section_state.cpp
     src/director/migration.cpp
+    src/director/midi_legacy.cpp
     src/dock/dock-widgets.cpp
     src/dock/music-dock.cpp
-    src/dock/midi-director-dock.cpp
-    ${MD_MIDI}/director-midi.cpp
-    ${MD_MIDI}/midi_map.cpp
-    ${MD_MIDI}/midi_msg.cpp
 )
 target_include_directories(
   ${CMAKE_PROJECT_NAME}
   PRIVATE
     src
     ${MD_ROOT}/include
-    ${MD_MIDI}
 )
 
 if(HAVE_FRONTEND_API)
@@ -83,11 +71,6 @@ endif()
 
 if(ENABLE_QT)
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ENABLE_QT)
-endif()
-
-if(MD_TEST_HOOKS)
-  message(WARNING "MD_TEST_HOOKS is ON: sandbox test hooks are compiled in (do not ship this build)")
-  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE MD_TEST_HOOKS)
 endif()
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

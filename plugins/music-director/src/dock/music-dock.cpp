@@ -287,7 +287,7 @@ protected:
 
 		QObject::connect(bTap, &QPushButton::clicked, this, [this] { send(mdhost::Cmd::TapTempo); });
 		QObject::connect(bPhrase, &QPushButton::clicked, this, [this] { send(mdhost::Cmd::PhraseNow); });
-		/* the checked state follows the clock in poll(), so hotkey, MIDI and tap toggles show too */
+		/* the checked state follows the clock in poll(), so hotkey and tap toggles show too */
 		QObject::connect(bLock, &QPushButton::clicked, this, [this] { send(mdhost::Cmd::LockBpm); });
 		QObject::connect(bNudgeBack, &QPushButton::clicked, this, [this] { send(mdhost::Cmd::NudgeBack); });
 		QObject::connect(bNudgeFwd, &QPushButton::clicked, this, [this] { send(mdhost::Cmd::NudgeFwd); });
