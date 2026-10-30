@@ -24,6 +24,8 @@ add_library(
   ${SD_CORE}/settings.cpp
   ${SD_CORE}/switch_sched.cpp
   ${SD_CORE}/confirm.cpp
+  ${SD_CORE}/event_map.cpp
+  ${SD_CORE}/event_engine.cpp
 )
 target_include_directories(sd_core PUBLIC ${SD_CORE} ${DIRECTOR_MIDI} ${DIRECTOR_COMMON} ${DIRECTOR_INCLUDE})
 target_link_libraries(sd_core PUBLIC Threads::Threads)
@@ -41,6 +43,9 @@ add_executable(
   test_confirm.cpp
   test_follow_script.cpp
   test_seq_guard.cpp
+  test_event_map.cpp
+  test_event_engine.cpp
+  test_event_guard.cpp
 )
 target_include_directories(sd_core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/doctest)
 target_link_libraries(sd_core_tests PRIVATE sd_core)

@@ -60,6 +60,8 @@ target_sources(
     src/core/settings.cpp
     src/core/switch_sched.cpp
     src/core/confirm.cpp
+    src/core/event_map.cpp
+    src/core/event_engine.cpp
     src/dock/sd-dock.cpp
 )
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE src src/core src/obs ../../common ../../common/midi ../../include)
