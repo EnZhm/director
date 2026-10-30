@@ -61,6 +61,7 @@ SchedulerConfig make_sched_cfg(const SetFile &s)
 	for (const auto &p : s.palettes) {
 		c.names.push_back(p.name);
 		c.colour_counts.push_back(static_cast<int>(p.colours.size()));
+		c.in_pool.push_back(p.in_pool);
 	}
 	c.enabled = s.director.enabled;
 	c.trigger = s.palette_changes.trigger;

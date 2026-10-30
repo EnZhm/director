@@ -26,6 +26,7 @@ void Scheduler::reset(const SchedulerConfig &cfg)
 	panic_ = false;
 	force_off_ = false;
 	forced_on_ = false;
+	pool_empty_ = false;
 	cycle_active_ = false;
 	cycle_seq_.clear();
 }
@@ -35,10 +36,12 @@ void Scheduler::reconfigure(const SchedulerConfig &cfg, int live)
 	const bool structure = cfg.palette_count != cfg_.palette_count || cfg.names != cfg_.names ||
 			       cfg.breakdown_index != cfg_.breakdown_index || cfg.order != cfg_.order;
 	const bool reseed = cfg.seed != cfg_.seed;
+	const bool mask_changed = cfg.in_pool != cfg_.in_pool;
 	cfg_ = cfg;
 	if (reseed)
 		rng_.reseed(cfg.seed);
-	if (structure || reseed) {
+	if (structure || reseed || mask_changed) {
+		/* the shuffle bag rebuilds from the (new) in-pool set at the next automatic pick */
 		order_.clear();
 		shuffle_cycle_.clear();
 	}
@@ -106,10 +109,59 @@ std::vector<int> Scheduler::normal_idx() const
 	std::vector<int> pool;
 	pool.reserve(static_cast<std::size_t>(cfg_.palette_count));
 	for (int i = 0; i < cfg_.palette_count; ++i) {
-		if (i != cfg_.breakdown_index)
+		if (i != cfg_.breakdown_index && in_pool(i))
 			pool.push_back(i);
 	}
 	return pool;
+}
+
+bool Scheduler::in_pool(int i) const
+{
+	if (i < 0 || i >= cfg_.palette_count)
+		return false;
+	if (cfg_.in_pool.empty())
+		return true;
+	return i < static_cast<int>(cfg_.in_pool.size()) ? cfg_.in_pool[static_cast<std::size_t>(i)] : true;
+}
+
+std::string Scheduler::name_of(int i) const
+{
+	return (i >= 0 && i < static_cast<int>(cfg_.names.size())) ? cfg_.names[static_cast<std::size_t>(i)]
+								   : std::to_string(i);
+}
+
+// "automatic pool is empty" guard (spec 7.1): automatic changes hold the live palette and log
+// once on entering the empty state and once on leaving it. Called on every automatic pick.
+std::vector<Event> Scheduler::pool_guard(uint64_t beat)
+{
+	std::vector<Event> out;
+	const bool empty = normal_idx().empty();
+	if (empty && !pool_empty_) {
+		pool_empty_ = true;
+		Event e;
+		e.type = Event::Type::Command;
+		e.beat = beat;
+		e.detail = "automatic pool is empty; holding '" + name_of(live_) + "'";
+		out.push_back(e);
+	} else if (!empty && pool_empty_) {
+		pool_empty_ = false;
+		Event e;
+		e.type = Event::Type::Command;
+		e.beat = beat;
+		e.detail = "automatic pool has a palette again";
+		out.push_back(e);
+	}
+	return out;
+}
+
+std::vector<Event> Scheduler::auto_change(int dir, uint64_t beat, const std::string &why)
+{
+	std::vector<Event> out;
+	std::vector<Event> guard = pool_guard(beat);
+	out.insert(out.end(), guard.begin(), guard.end());
+	std::vector<Event> evs = go_live(pick_next(dir), why, beat);
+	out.insert(out.end(), evs.begin(), evs.end());
+	return out;
 }
 
 int Scheduler::pick_next(int dir)
@@ -216,13 +268,26 @@ std::vector<Event> Scheduler::on_section_change(Section sec, uint64_t beat)
 			out.push_back(e);
 		} else if (cfg_.breakdown_index >= 0 && cfg_.breakdown_index < cfg_.palette_count) {
 			bd_active_ = true;
-			auto evs = go_live(cfg_.breakdown_index, "breakdown", beat);
-			out.insert(out.end(), evs.begin(), evs.end());
+			if (in_pool(cfg_.breakdown_index)) {
+				auto evs = go_live(cfg_.breakdown_index, "breakdown", beat);
+				out.insert(out.end(), evs.begin(), evs.end());
+			} else {
+				/* breakdown palette out of the pool: hold the current palette (spec 7.1) */
+				Event e;
+				e.type = Event::Type::Command;
+				e.beat = beat;
+				e.detail = "breakdown palette '" + name_of(cfg_.breakdown_index) +
+					   "' is out of the pool; holding '" + name_of(live_) + "'";
+				out.push_back(e);
+			}
 		}
 	} else if (sec == Section::Drop) {
 		bool cycling = false;
 		if (bd_active_) {
 			bd_active_ = false;
+			/* the automatic pool guard fires before the pick (spec 7.1: empty -> hold + log) */
+			std::vector<Event> guard = pool_guard(beat);
+			out.insert(out.end(), guard.begin(), guard.end());
 			const int target = pick_next(1);
 			/* v1.0.1 drop colour cycle: roll the seeded RNG ONLY when enabled, so a set without it
 			 * replays exactly the v1.0.0 decisions */
@@ -252,7 +317,7 @@ std::vector<Event> Scheduler::on_section_change(Section sec, uint64_t beat)
 				out.insert(out.end(), evs.begin(), evs.end());
 			}
 		} else if (cfg_.trigger == ChangeTrigger::Drop) {
-			auto evs = go_live(pick_next(1), "drop", beat);
+			auto evs = auto_change(1, beat, "drop");
 			out.insert(out.end(), evs.begin(), evs.end());
 		}
 		if (cfg_.off_on_drop && cycling) {
@@ -309,8 +374,7 @@ std::vector<Event> Scheduler::on_phrase(uint64_t phrase, uint64_t beat)
 	if (!bd_active_ && !cycle_active_) {
 		if (cfg_.trigger == ChangeTrigger::Phrases &&
 		    (phrase % static_cast<uint64_t>(cfg_.every_phrases)) == 0) {
-			auto evs =
-				go_live(pick_next(1), "every " + std::to_string(cfg_.every_phrases) + " phrases", beat);
+			auto evs = auto_change(1, beat, "every " + std::to_string(cfg_.every_phrases) + " phrases");
 			out.insert(out.end(), evs.begin(), evs.end());
 		}
 		if (cfg_.trigger == ChangeTrigger::Random) {
@@ -319,7 +383,7 @@ std::vector<Event> Scheduler::on_phrase(uint64_t phrase, uint64_t beat)
 				char why[48];
 				std::snprintf(why, sizeof(why), "random %.2f < %.2f", r,
 					      static_cast<double>(cfg_.chance));
-				auto evs = go_live(pick_next(1), why, beat);
+				auto evs = auto_change(1, beat, why);
 				out.insert(out.end(), evs.begin(), evs.end());
 			}
 		}
@@ -431,12 +495,12 @@ std::vector<Event> Scheduler::command(Command cmd, int palette_index, uint64_t b
 		}
 		break;
 	case Command::Next: {
-		auto evs = go_live(pick_next(1), "manual next", beat);
+		auto evs = auto_change(1, beat, "manual next");
 		out.insert(out.end(), evs.begin(), evs.end());
 		break;
 	}
 	case Command::Prev: {
-		auto evs = go_live(pick_next(-1), "manual prev", beat);
+		auto evs = auto_change(-1, beat, "manual prev");
 		out.insert(out.end(), evs.begin(), evs.end());
 		break;
 	}
@@ -444,6 +508,9 @@ std::vector<Event> Scheduler::command(Command cmd, int palette_index, uint64_t b
 		if (palette_index >= 0 && palette_index < cfg_.palette_count) {
 			auto evs = go_live(palette_index, "manual", beat);
 			out.insert(out.end(), evs.begin(), evs.end());
+			/* manual override (spec 7.1): an out-of-pool pad still plays, with an extra log */
+			if (!in_pool(palette_index))
+				log("manual '" + name_of(palette_index) + "' (out of the automatic pool)");
 		}
 		break;
 	}

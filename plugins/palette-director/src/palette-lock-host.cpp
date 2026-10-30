@@ -154,6 +154,7 @@ pd::SetFile to_setfile(const struct pl_set &s)
 		pd::PaletteSpec ps;
 		ps.name = p.name;
 		ps.mode = p.mode == PL_MODE_DUOTONE ? pd::RecolourMode::Duotone : pd::RecolourMode::GradientMap;
+		ps.in_pool = p.in_pool;
 		for (int j = 0; j < p.n_colours; j++)
 			ps.colours.push_back(pd::Colour{p.colours[j].r, p.colours[j].g, p.colours[j].b});
 		f.palettes.push_back(ps);

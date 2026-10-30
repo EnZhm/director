@@ -35,6 +35,9 @@ struct SchedulerConfig {
 	float drop_cycle_chance = 0.5f;
 	int drop_cycle_bars = 1;
 	int drop_cycle_steps_per_beat = 2;
+	// Automatic pool (spec 7.1): one flag per palette, true = in the pool. Empty = all in
+	// (2.0 behaviour, so callers that never set it draw from every palette).
+	std::vector<bool> in_pool;
 };
 
 // Palette-change scheduler + lock behaviours -> mix target + pfade (spec 4.2).
@@ -74,8 +77,12 @@ public:
 
 private:
 	std::vector<int> normal_idx() const;
+	bool in_pool(int i) const;
+	std::string name_of(int i) const;
 	int pick_next(int dir);
 	std::vector<Event> go_live(int i, const std::string &why, uint64_t beat);
+	std::vector<Event> pool_guard(uint64_t beat);
+	std::vector<Event> auto_change(int dir, uint64_t beat, const std::string &why);
 	void release_panic();
 	void start_drop_cycle(uint64_t beat, int target, std::vector<Event> &out);
 	void cycle_cut(int i, int step, uint64_t beat, std::vector<Event> &out);
@@ -99,6 +106,7 @@ private:
 	bool panic_ = false; // PANIC latch (v1.0.1: a toggle; PANIC again or Resume releases it)
 	bool force_off_ = false;
 	bool forced_on_ = false;
+	bool pool_empty_ = false; // "automatic pool is empty" latch (logged once per transition, spec 7.1)
 	// drop colour cycle
 	bool cycle_active_ = false;
 	double cycle_start_ = 0.0;   // beat the cycle started on (the drop downbeat)

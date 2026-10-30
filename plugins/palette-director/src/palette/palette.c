@@ -93,6 +93,7 @@ void pl_palette_default(struct pl_palette *p, const char *name)
 	snprintf(p->name, sizeof(p->name), "%s", name);
 	p->mode = PL_MODE_GRADIENT;
 	p->n_colours = 4;
+	p->in_pool = true; /* new palettes are in the automatic pool (spec 7.1) */
 	p->colours[0] = pl_colour_from_hex("#000000");
 	p->colours[1] = pl_colour_from_hex("#444444");
 	p->colours[2] = pl_colour_from_hex("#BBBBBB");
@@ -166,6 +167,7 @@ bool pl_duplicate_palette(struct pl_set *s, int index, int *live, int *edit, int
 
 	struct pl_palette copy = s->palettes[index];
 	snprintf(copy.name, sizeof(copy.name), "%s", base);
+	copy.in_pool = true; /* duplicated palettes are in the automatic pool (spec 7.1) */
 
 	/* shift palettes after index up one, then insert the copy at index+1 */
 	memmove(&s->palettes[index + 2], &s->palettes[index + 1],
