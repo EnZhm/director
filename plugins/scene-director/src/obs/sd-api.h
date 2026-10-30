@@ -22,6 +22,7 @@ struct Status {
 	std::string osc_host;
 	int osc_send_port = 0, osc_feedback_port = 0;
 	bool feedback_bound = false; // the feedback socket bound (false when 0 = no feedback, or in use)
+	bool port_conflict = false;  // feedback port == send port: running without feedback (spec 4.6)
 	uint64_t sent = 0, received = 0, dropped = 0;
 
 	// confirmation counters + latency (spec 4.6)

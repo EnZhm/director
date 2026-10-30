@@ -365,7 +365,7 @@ void apply_settings_defaults(Settings &s)
 
 	s.set_default_string("osc_host", "127.0.0.1");
 	s.set_default_int("osc_send_port", 7000);
-	s.set_default_int("osc_feedback_port", 7001);
+	s.set_default_int("osc_feedback_port", 9001);
 	s.set_default_int("confirm_timeout_ms", 2000);
 
 	/* The 2.0 trigger keys are kept verbatim (no new default is written, so a value carried
@@ -431,6 +431,17 @@ SourceConfig read_config(const Settings &s)
 	const double lead = s.has("syn_lead_ms") ? s.get_double("syn_lead_ms") : s.get_double("lead_ms");
 	c.lead_ms = std::clamp(lead, 0.0, 500.0);
 	return c;
+}
+
+bool port_conflict(const SourceConfig &c)
+{
+	return c.osc_feedback_port != 0 && c.osc_feedback_port == c.osc_send_port;
+}
+
+std::string port_conflict_text(const std::string &source_name, int port)
+{
+	return "'" + source_name + "': feedback port " + std::to_string(port) +
+	       " equals the send port; set Synesthesia's OSC Output port to a different port (default 9001)";
 }
 
 } // namespace cd

@@ -40,6 +40,19 @@ int reserve_free_port()
 
 /* A fake Synesthesia: receives on one socket (its OSC input) and answers every scene-changing
  * send with /scenes/fake from its output socket, aimed back at the transport's feedback port. */
+std::vector<uint8_t> bundle_of(const std::vector<std::vector<uint8_t>> &elements)
+{
+	std::vector<uint8_t> b = {'#', 'b', 'u', 'n', 'd', 'l', 'e', 0, 0, 0, 0, 0, 0, 0, 0, 1};
+	for (const std::vector<uint8_t> &e : elements) {
+		const uint32_t n = (uint32_t)e.size();
+		b.push_back((uint8_t)(n >> 24));
+		b.push_back((uint8_t)(n >> 16));
+		b.push_back((uint8_t)(n >> 8));
+		b.push_back((uint8_t)n);
+		b.insert(b.end(), e.begin(), e.end());
+	}
+	return b;
+}
 struct FakeSyn {
 	UdpSocket in;
 	UdpSocket out;
@@ -49,6 +62,7 @@ struct FakeSyn {
 	std::vector<OscMessage> messages; // full decoded messages, in arrival order
 	std::vector<uint64_t> arrived_ns; // osc_now_ns() at arrival, parallel to messages
 	std::atomic<bool> answer{true};   // false: never sends feedback (feedback loss)
+	std::atomic<bool> bundled{true};  // answer as an OSC bundle, as Synesthesia 1.25 does
 	std::atomic<bool> stop{false};
 	std::thread th;
 
@@ -81,8 +95,13 @@ struct FakeSyn {
 			}
 			if (answer.load() && (m.address == "/playlist/next" || m.address == "/playlist/previous")) {
 				std::vector<uint8_t> echo;
-				if (osc_encode(osc_scene("fake", ""), echo))
+				if (osc_encode(osc_scene("fake", ""), echo)) {
+					/* Synesthesia 1.25 answers with a bundle: "#bundle\0", time tag 1
+					 * (immediately), one element (size + message) */
+					if (bundled.load())
+						echo = bundle_of({echo});
 					out.send(echo.data(), echo.size());
+				}
 			}
 		}
 	}
@@ -231,13 +250,20 @@ TEST_CASE("engine + confirm + transport: one datagram per section edge, confirme
 		CHECK(a == "/playlist/next");
 	CHECK(link.sent() >= 3u);
 
-	/* drain the feedback: each /scenes/fake confirms the oldest expectation */
+	/* drain the (bundled) feedback: each /scenes/fake confirms the oldest expectation */
 	std::vector<uint8_t> msg;
+	std::vector<OscMessage> ms;
+	size_t bundles = 0;
 	while (link.pop(msg)) {
-		OscMessage m;
-		if (osc_decode(msg, m) && m.address == "/scenes/fake")
-			confirm.on_scene("fake", (int64_t)osc_now_ns());
+		if (msg.size() >= 8 && msg[0] == '#')
+			++bundles;
+		if (!osc_decode_packet(msg, ms))
+			continue;
+		for (const OscMessage &m : ms)
+			if (m.address == "/scenes/fake")
+				confirm.on_scene("fake", (int64_t)osc_now_ns());
 	}
+	CHECK(bundles == 3u); /* the confirmations below arrived as bundles */
 
 	const ConfirmCounters cc = confirm.counters();
 	CHECK(cc.confirmed == 3);
@@ -304,12 +330,14 @@ struct Rig {
 	void drain(int64_t now)
 	{
 		std::vector<uint8_t> raw;
+		std::vector<OscMessage> ms;
 		while (link.pop(raw)) {
 			confirm.on_datagram(now);
-			OscMessage m;
-			if (!osc_decode(raw, m))
+			if (!osc_decode_packet(raw, ms)) /* the same path as the source's drain */
 				continue;
-			if (m.address.rfind("/scenes/", 0) == 0 && m.address.size() > 8) {
+			for (const OscMessage &m : ms) {
+				if (m.address.rfind("/scenes/", 0) != 0 || m.address.size() <= 8)
+					continue;
 				const std::string name = m.address.substr(8);
 				for (ConfirmEvent &ev : confirm.on_scene(name, now))
 					confirm_log.push_back(std::move(ev));

@@ -4,6 +4,7 @@
 #   xplugin_cd     Clip Director exactly-once (own executable: Clip and Scene Director both use
 #   xplugin_sd     Scene Director exactly-once   namespace cd for their cores)
 #   xplugin_osc    the shared common/osc codec and UDP transport (director_osc)
+#   xplugin_osc_bundle  OSC bundle decoding + real Synesthesia feedback fixtures (ASan/UBSan)
 # All are driven by the same scripted clock (clock_script.h).
 #   cmake -S tests/xplugin -B build-xplugin && cmake --build build-xplugin && ctest --test-dir build-xplugin
 cmake_minimum_required(VERSION 3.16)
@@ -123,3 +124,22 @@ target_include_directories(xplugin_osc PRIVATE ${DOCTEST} ${DIRECTOR_ROOT}/commo
 target_link_libraries(xplugin_osc PRIVATE director_osc)
 target_compile_options(xplugin_osc PRIVATE ${XP_WARN})
 add_test(NAME xplugin_osc COMMAND xplugin_osc)
+
+# The bundle decoder gets its own executable so it can run under ASan/UBSan where available.
+add_executable(xplugin_osc_bundle main.cpp test_osc_bundle.cpp ${DIRECTOR_ROOT}/common/osc/osc.cpp)
+target_include_directories(xplugin_osc_bundle PRIVATE ${DOCTEST} ${DIRECTOR_ROOT}/common/osc)
+target_compile_definitions(xplugin_osc_bundle PRIVATE XPLUGIN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+target_compile_options(xplugin_osc_bundle PRIVATE ${XP_WARN})
+if(NOT MSVC)
+  include(CheckCXXSourceCompiles)
+  set(CMAKE_REQUIRED_FLAGS "-fsanitize=address,undefined")
+  set(CMAKE_REQUIRED_LINK_OPTIONS "-fsanitize=address,undefined")
+  check_cxx_source_compiles("int main() { return 0; }" XP_HAVE_ASAN_UBSAN)
+  unset(CMAKE_REQUIRED_FLAGS)
+  unset(CMAKE_REQUIRED_LINK_OPTIONS)
+  if(XP_HAVE_ASAN_UBSAN)
+    target_compile_options(xplugin_osc_bundle PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(xplugin_osc_bundle PRIVATE -fsanitize=address,undefined)
+  endif()
+endif()
+add_test(NAME xplugin_osc_bundle COMMAND xplugin_osc_bundle)

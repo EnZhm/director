@@ -49,6 +49,15 @@ bool osc_encode(const OscMessage &m, std::vector<uint8_t> &out);
 bool osc_decode(const uint8_t *data, std::size_t len, OscMessage &out);
 bool osc_decode(const std::vector<uint8_t> &data, OscMessage &out);
 
+// A whole datagram: a bare message (-> 1 message) or an OSC 1.0 bundle ("#bundle\0", an 8-byte
+// NTP time tag, then elements of a big-endian int32 size followed by a message or a nested
+// bundle). Bundles are unwrapped recursively (depth cap kOscMaxBundleDepth); time tags are
+// ignored; messages come back in packet order. Any malformed element rejects the whole packet
+// (out cleared, false). An empty bundle is valid (true, no messages). Never reads past len.
+constexpr int kOscMaxBundleDepth = 8;
+bool osc_decode_packet(const uint8_t *data, std::size_t len, std::vector<OscMessage> &out);
+bool osc_decode_packet(const std::vector<uint8_t> &data, std::vector<OscMessage> &out);
+
 // Synesthesia scene names are lowercase with no spaces, underscores or hyphens:
 // /scenes/{sceneName}, so "Grid Tunnel" goes out as /scenes/gridtunnel.
 std::string osc_slug(const std::string &name);
