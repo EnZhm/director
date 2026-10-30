@@ -37,6 +37,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>/
 #define S_MODE "palette.%d.mode"
 #define S_NCOLOURS "palette.%d.n_colours"
 #define S_COLOUR "palette.%d.colour.%d"
+#define S_POOL "palette.%d.pool"
 
 #define PD_N_NAMED_HOTKEYS 7
 
@@ -150,6 +151,15 @@ static void write_set(obs_data_t *s, const struct pl_set *set, bool def)
 			snprintf(key, sizeof(key), S_COLOUR, i, j);
 			SET_INT(s, key, (long long)pl_colour_to_obs(p->colours[j]));
 		}
+		/* v2.1 palette pool: the key is present (false) only when the palette is out of the
+		 * automatic pool; absent means in (spec 7.1). No default is written. */
+		snprintf(key, sizeof(key), S_POOL, i);
+		if (!def) {
+			if (p->in_pool)
+				obs_data_unset_user_value(s, key);
+			else
+				obs_data_set_bool(s, key, false);
+		}
 	}
 }
 
@@ -242,6 +252,9 @@ static void set_from_settings(obs_data_t *s, struct pl_set *set)
 
 		snprintf(key, sizeof(key), S_NCOLOURS, i);
 		p->n_colours = clampi(obs_data_get_int(s, key), 2, PL_MAX_COLOURS);
+
+		snprintf(key, sizeof(key), S_POOL, i);
+		p->in_pool = obs_data_has_user_value(s, key) ? obs_data_get_bool(s, key) : true;
 
 		for (int j = 0; j < p->n_colours; j++) {
 			snprintf(key, sizeof(key), S_COLOUR, i, j);
