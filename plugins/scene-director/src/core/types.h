@@ -25,6 +25,7 @@ struct ClockSample {
 	int64_t epoch = 0;           // +1 when the beat grid is re-anchored
 	int64_t beat = 0;            // integer beat (for the follower's beat/phrase resync)
 	int64_t phrase = 0;          // phrase counter
+	int64_t phrase_beat = 0;     // the beat the current phrase started on; 0 when absent (older MD)
 };
 
 } // namespace cd

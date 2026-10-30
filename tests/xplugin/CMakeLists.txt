@@ -107,6 +107,17 @@ target_include_directories(xplugin_sd PRIVATE ${PLUGINS} ${PLUGINS}/scene-direct
 target_compile_options(xplugin_sd PRIVATE ${XP_WARN})
 add_test(NAME xplugin_sd COMMAND xplugin_sd)
 
+add_executable(
+  xplugin_sd_map
+  test_xonce_sd_map.cpp
+  ${PLUGINS}/scene-director/src/core/event_map.cpp
+  ${PLUGINS}/scene-director/src/core/event_engine.cpp
+  ${PLUGINS}/scene-director/src/core/switch_sched.cpp
+)
+target_include_directories(xplugin_sd_map PRIVATE ${PLUGINS} ${PLUGINS}/scene-director/src/core ${DIRECTOR_ROOT}/common ${DOCTEST})
+target_compile_options(xplugin_sd_map PRIVATE ${XP_WARN})
+add_test(NAME xplugin_sd_map COMMAND xplugin_sd_map)
+
 add_executable(xplugin_osc main.cpp test_osc.cpp test_osc_transport.cpp)
 target_include_directories(xplugin_osc PRIVATE ${DOCTEST} ${DIRECTOR_ROOT}/common/osc)
 target_link_libraries(xplugin_osc PRIVATE director_osc)
