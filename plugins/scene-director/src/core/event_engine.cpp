@@ -71,7 +71,12 @@ double EventEngine::offset_beats(int offset_ms, double bpm) const
 
 int64_t EventEngine::bar_of(int64_t beat, const ClockSample &clk) const
 {
-	return floor_div(beat - clk.phrase_beat, 4);
+	// Absolute bar index within the epoch. Bar lines sit on phrase_beat + 4k and phrase lengths
+	// are multiples of 4, so the grid offset (phrase_beat mod 4) is stable across phrase edges.
+	// Counting from that offset rather than from phrase_beat keeps the index (and the
+	// exactly-once key) unique across phrases instead of restarting at 0 on every phrase.
+	const int64_t grid = clk.phrase_beat - 4 * floor_div(clk.phrase_beat, 4);
+	return floor_div(beat - grid, 4);
 }
 
 double EventEngine::next_boundary(Quantize q, double event_beat, const ClockSample &clk) const
