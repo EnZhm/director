@@ -23,12 +23,6 @@ if(ENABLE_FRONTEND_API)
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ENABLE_FRONTEND_API)
 endif()
 
-# winmm: MIDI out for Scene Director. Windows only; elsewhere common/midi/director-midi.cpp is a
-# stub that reports no devices.
-if(WIN32)
-  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE winmm)
-endif()
-
 if(ENABLE_QT)
   find_package(Qt6 COMPONENTS Widgets Core)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets)
@@ -54,17 +48,22 @@ target_sources(
     src/plugin-main.c
     src/obs/sd-source.cpp
     src/obs/sd-hotkeys.cpp
-    ../../common/midi/director-midi.cpp
-    ../../common/midi/midi_map.cpp
-    ../../common/midi/midi_msg.cpp
+    ../../common/osc/osc.cpp
+    ../../common/osc/osc-transport.cpp
     src/core/settings.cpp
-    src/core/switch_sched.cpp
+    src/core/confirm.cpp
+    src/core/event_map.cpp
+    src/core/event_engine.cpp
     src/dock/sd-dock.cpp
 )
-target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE src src/core src/obs ../../common ../../common/midi ../../include)
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE src src/core src/obs ../../common ../../common/osc ../../include)
 
-# the MIDI output note-off worker runs on its own thread
+# the OSC transport's sender / receiver run on their own threads
 find_package(Threads REQUIRED)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Threads::Threads)
+# osc-transport uses Winsock (socket/sendto/WSAStartup/WSAIoctl ...)
+if(WIN32)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ws2_32)
+endif()
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

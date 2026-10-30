@@ -1,12 +1,14 @@
 /*
-Scene Director dock: the control surface for the set. It picks the Scene Director source, shows the
-Music Director clock and section, the MIDI out link (port open / not found / none selected), the
-Next / Prev buttons, the automatic-switch triggers, the cooldown and Scene lead, the Next and Prev
-message editors, and the log of every message with its beat, reason and bytes.
+Scene Director dock: the control surface for the set (spec 4.7). It picks the Scene Director
+source and shows the Music Director clock and section, the OSC link chip, host and ports (with the
+spec 4.6 port guard), sent / received / dropped, confirmation latency and counters, Next / Prev,
+the breakdown and drop triggers with cooldown and Scene lead, the shared event map (path, Reload,
+Open folder, last load summary) and the log.
 
-Reads the source through sdapi (thread-safe); every edit is saved in the source's settings. Its
-refresh timer also steps the scheduler (sdapi::tick) so the feature keeps working when the source
-is not in the active scene.
+The dock only calls sdapi (thread-safe); it never touches a socket. Triggers and cooldown edit the
+shared event map entries breakdown-next / drop-next, the single source of truth; Scene lead and the
+ports are the source's own settings. Its refresh timer also steps the scheduler (sdapi::tick) so the
+feature keeps working when the source is not in the active scene.
 */
 #include "sd-dock.h"
 
@@ -18,18 +20,20 @@ is not in the active scene.
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QDockWidget>
-#include <QFrame>
+#include <QFileInfo>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMainWindow>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollBar>
-#include <QSlider>
 #include <QSpinBox>
 #include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -38,19 +42,55 @@ is not in the active scene.
 #include <string>
 #include <vector>
 
-#include "midi_msg.h"
 #include "obs/sd-api.h"
-#include "director-midi.h"
 
 namespace {
 
 const char *kDockId = "scene-director-dock";
 const char *kSectionNames[] = {"GROOVE", "BREAKDOWN", "DROP"};
 const char *kSectionColours[] = {"#2d6a4f", "#1d4e89", "#9d0208"};
+const char *kBreakdownId = "breakdown-next";
+const char *kDropId = "drop-next";
+const int kLogLines = 200;
+const char *kAmber = "color:#f59f00; font-weight:bold;";
 
 QString text_of(const std::string &s)
 {
 	return QString::fromStdString(s);
+}
+
+QString ms_of(int64_t ns)
+{
+	return ns < 0 ? QString("-") : QString("%1 ms").arg((double)ns / 1e6, 0, 'f', 0);
+}
+
+const sdapi::Status::MappingInfo *find_mapping(const sdapi::Status &st, const char *id)
+{
+	for (const auto &m : st.mappings)
+		if (m.id == id)
+			return &m;
+	return nullptr;
+}
+
+/* set a spin box only when the user is not editing it */
+void sync_spin(QSpinBox *w, int v)
+{
+	if (w->hasFocus() || w->value() == v)
+		return;
+	w->blockSignals(true);
+	w->setValue(v);
+	w->blockSignals(false);
+}
+
+void sync_check(QCheckBox *w, const sdapi::Status::MappingInfo *m)
+{
+	w->setEnabled(m != nullptr);
+	const bool on = m && m->enabled;
+	if (w->isChecked() == on)
+		return;
+	w->blockSignals(true);
+	w->setChecked(on);
+	w->blockSignals(false);
 }
 
 class SceneDirectorDock : public QWidget {
@@ -76,19 +116,46 @@ public:
 		top->addWidget(section_);
 		root->addLayout(top);
 
-		/* MIDI out: link chip, device, rescan */
+		/* OSC link chip + traffic */
 		auto *link = new QHBoxLayout();
-		chip_ = new QLabel(obs_module_text("Link.None"));
+		chip_ = new QLabel(obs_module_text("OscSending"));
 		chip_->setAlignment(Qt::AlignCenter);
 		chip_->setMinimumWidth(112);
 		link->addWidget(chip_);
-		devices_ = new QComboBox();
-		devices_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-		devices_->setMinimumContentsLength(16);
-		link->addWidget(devices_, 1);
-		rescan_ = new QPushButton(obs_module_text("MidiRescan"));
-		link->addWidget(rescan_);
+		traffic_ = new QLabel();
+		link->addWidget(traffic_, 1);
 		root->addLayout(link);
+
+		/* host and ports (spec 4.6 port guard) */
+		auto *ports = new QHBoxLayout();
+		host_ = new QLineEdit();
+		host_->setPlaceholderText(obs_module_text("OscHost"));
+		host_->setToolTip(obs_module_text("OscHost"));
+		send_port_ = new QSpinBox();
+		send_port_->setRange(1, 65535);
+		send_port_->setToolTip(obs_module_text("OscSendPort"));
+		feedback_port_ = new QSpinBox();
+		feedback_port_->setRange(0, 65535);
+		feedback_port_->setToolTip(obs_module_text("Dock.FeedbackPort.Tip"));
+		apply_ports_ = new QPushButton(obs_module_text("Dock.Apply"));
+		ports->addWidget(new QLabel(obs_module_text("OscHost")));
+		ports->addWidget(host_, 1);
+		ports->addWidget(new QLabel(obs_module_text("Dock.Send")));
+		ports->addWidget(send_port_);
+		ports->addWidget(new QLabel(obs_module_text("Dock.Feedback")));
+		ports->addWidget(feedback_port_);
+		ports->addWidget(apply_ports_);
+		root->addLayout(ports);
+		port_warn_ = new QLabel();
+		port_warn_->setWordWrap(true);
+		port_warn_->setStyleSheet(kAmber);
+		port_warn_->hide();
+		root->addWidget(port_warn_);
+
+		/* confirmations (feedback is best-effort: misses are counters, not errors) */
+		confirm_ = new QLabel();
+		confirm_->setToolTip(obs_module_text("Dock.Confirm.Tip"));
+		root->addWidget(confirm_);
 
 		/* Next / Prev */
 		auto *manual = new QHBoxLayout();
@@ -101,81 +168,89 @@ public:
 		manual->addStretch(1);
 		root->addLayout(manual);
 
-		/* triggers, cooldown, scene lead */
-		auto *grid = new QGridLayout();
-		head_ = new QLabel(obs_module_text("Head.Switches"));
-		head_->setStyleSheet("font-weight:bold;");
-		grid->addWidget(head_, 0, 0, 1, 3);
-		on_breakdown_ = new QCheckBox(obs_module_text("Trigger.Breakdown"));
-		on_drop_ = new QCheckBox(obs_module_text("Trigger.Drop"));
-		grid->addWidget(on_breakdown_, 1, 0, 1, 3);
-		grid->addWidget(on_drop_, 2, 0, 1, 3);
-		grid->addWidget(new QLabel(obs_module_text("Cooldown")), 4, 0);
+		/* triggers: the event map entries breakdown-next / drop-next + Scene lead */
+		auto *trig = new QGridLayout();
+		breakdown_ = new QCheckBox(obs_module_text("Dock.Breakdown"));
+		breakdown_->setToolTip(obs_module_text("Dock.Breakdown.Tip"));
+		drop_ = new QCheckBox(obs_module_text("Dock.Drop"));
+		drop_->setToolTip(obs_module_text("Dock.Drop.Tip"));
 		cooldown_ = new QSpinBox();
 		cooldown_->setRange(0, 256);
-		cooldown_->setSuffix(obs_module_text("Beats"));
-		cooldown_->setToolTip(obs_module_text("Cooldown.Tip"));
-		grid->addWidget(cooldown_, 4, 1, 1, 2);
-		grid->addWidget(new QLabel(obs_module_text("SceneLead")), 5, 0);
-		lead_ = new QSlider(Qt::Horizontal);
+		cooldown_->setSuffix(QString(" ") + obs_module_text("Dock.Beats"));
+		cooldown_->setToolTip(obs_module_text("Dock.Cooldown.Tip"));
+		lead_ = new QSpinBox();
 		lead_->setRange(0, 500);
-		lead_->setToolTip(obs_module_text("SceneLead.Tip"));
-		lead_label_ = new QLabel("0 ms");
-		lead_label_->setMinimumWidth(52);
-		grid->addWidget(lead_, 5, 1);
-		grid->addWidget(lead_label_, 5, 2);
-		grid->setColumnStretch(1, 1);
-		root->addLayout(grid);
+		lead_->setSuffix(" ms");
+		lead_->setToolTip(obs_module_text("Dock.Lead.Tip"));
+		trig->addWidget(breakdown_, 0, 0);
+		trig->addWidget(drop_, 0, 1);
+		trig->addWidget(new QLabel(obs_module_text("Dock.Cooldown")), 1, 0);
+		trig->addWidget(cooldown_, 1, 1);
+		trig->addWidget(new QLabel(obs_module_text("SceneLead")), 2, 0);
+		trig->addWidget(lead_, 2, 1);
+		root->addLayout(trig);
+		trig_msg_ = new QLabel();
+		trig_msg_->setStyleSheet(kAmber);
+		trig_msg_->hide();
+		root->addWidget(trig_msg_);
 
-		/* Next / Prev message editors */
-		auto *msgs = new QGridLayout();
-		auto *mh = new QLabel(obs_module_text("Head.Messages"));
-		mh->setStyleSheet("font-weight:bold;");
-		msgs->addWidget(mh, 0, 0, 1, 4);
-		build_message_row(msgs, 1, obs_module_text("MidiNext"), &next_type_, &next_channel_, &next_number_);
-		build_message_row(msgs, 2, obs_module_text("MidiPrev"), &prev_type_, &prev_channel_, &prev_number_);
-		root->addLayout(msgs);
+		/* the shared event map */
+		auto *map = new QHBoxLayout();
+		map_path_ = new QLabel("-");
+		map_path_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+		map_path_->setMinimumWidth(40);
+		map_path_->setStyleSheet("color:#999;");
+		reload_ = new QPushButton(obs_module_text("Dock.Reload"));
+		reload_->setToolTip(obs_module_text("Dock.Reload.Tip"));
+		open_dir_ = new QPushButton(obs_module_text("Dock.OpenFolder"));
+		map->addWidget(new QLabel(obs_module_text("Dock.Map")));
+		map->addWidget(map_path_, 1);
+		map->addWidget(reload_);
+		map->addWidget(open_dir_);
+		root->addLayout(map);
+		map_summary_ = new QLabel();
+		map_summary_->setWordWrap(true);
+		root->addWidget(map_summary_);
 
-		/* log */
+		/* log: route, args, beat, reason, seq, confirm result; newest last */
 		log_head_ = new QLabel(obs_module_text("Head.Log"));
 		log_head_->setStyleSheet("font-weight:bold;");
 		root->addWidget(log_head_);
 		log_ = new QPlainTextEdit();
 		log_->setReadOnly(true);
-		log_->setMaximumBlockCount(400);
+		log_->setMaximumBlockCount(kLogLines);
 		log_->setLineWrapMode(QPlainTextEdit::NoWrap);
 		log_->setStyleSheet("font-family:Consolas,monospace; font-size:11px;");
 		log_->setMinimumHeight(110);
 		root->addWidget(log_, 1);
 
-		footer_ = new QLabel();
-		footer_->setStyleSheet("color:#999;");
-		root->addWidget(footer_);
-
-		/* wiring */
 		connect(sources_, &QComboBox::currentIndexChanged, this, [this](int) { select_current(); });
-		connect(rescan_, &QPushButton::clicked, this, [this] { list_devices(); });
-		connect(devices_, &QComboBox::activated, this, [this](int) { push_device(); });
 		connect(next_btn_, &QPushButton::clicked, this,
 			[this] { with_source([](obs_source_t *s) { sdapi::manual_next(s); }); });
 		connect(prev_btn_, &QPushButton::clicked, this,
 			[this] { with_source([](obs_source_t *s) { sdapi::manual_prev(s); }); });
-		connect(on_breakdown_, &QCheckBox::toggled, this, [this](bool) { push_triggers(); });
-		connect(on_drop_, &QCheckBox::toggled, this, [this](bool) { push_triggers(); });
-		connect(cooldown_, &QSpinBox::editingFinished, this, [this] { push_triggers(); });
-		connect(lead_, &QSlider::valueChanged, this,
-			[this](int v) { lead_label_->setText(QString("%1 ms").arg(v)); });
-		connect(lead_, &QSlider::sliderReleased, this, [this] { push_triggers(); });
-		connect(next_type_, &QComboBox::activated, this, [this](int) { push_messages(); });
-		connect(prev_type_, &QComboBox::activated, this, [this](int) { push_messages(); });
-		connect(next_channel_, QOverload<int>::of(&QSpinBox::valueChanged), this,
-			[this](int) { push_messages(); });
-		connect(next_number_, QOverload<int>::of(&QSpinBox::valueChanged), this,
-			[this](int) { push_messages(); });
-		connect(prev_channel_, QOverload<int>::of(&QSpinBox::valueChanged), this,
-			[this](int) { push_messages(); });
-		connect(prev_number_, QOverload<int>::of(&QSpinBox::valueChanged), this,
-			[this](int) { push_messages(); });
+		connect(apply_ports_, &QPushButton::clicked, this, [this] { save_ports(); });
+		connect(host_, &QLineEdit::returnPressed, this, [this] { save_ports(); });
+		connect(breakdown_, &QCheckBox::toggled, this,
+			[this](bool on) { map_result(sdapi::set_mapping_enabled(kBreakdownId, on), kBreakdownId); });
+		connect(drop_, &QCheckBox::toggled, this,
+			[this](bool on) { map_result(sdapi::set_mapping_enabled(kDropId, on), kDropId); });
+		connect(cooldown_, &QSpinBox::editingFinished, this, [this] { save_cooldown(); });
+		connect(lead_, &QSpinBox::editingFinished, this, [this] {
+			const double v = (double)lead_->value();
+			with_source([v](obs_source_t *s) { sdapi::set_scene_lead(s, v); });
+		});
+		connect(reload_, &QPushButton::clicked, this, [this] {
+			std::string err;
+			if (sdapi::reload_map(&err))
+				show_trig_msg(QString());
+			else
+				show_trig_msg(QString(obs_module_text("Dock.ReloadFailed")).arg(text_of(err)));
+		});
+		connect(open_dir_, &QPushButton::clicked, this, [this] {
+			if (!map_file_.isEmpty())
+				QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(map_file_).absolutePath()));
+		});
 
 		auto *fast = new QTimer(this);
 		fast->setInterval(40);
@@ -183,37 +258,15 @@ public:
 		fast->start();
 		auto *slow = new QTimer(this);
 		slow->setInterval(2000);
-		connect(slow, &QTimer::timeout, this, [this] {
-			list_sources();
-			list_devices();
-		});
+		connect(slow, &QTimer::timeout, this, [this] { list_sources(); });
 		slow->start();
 
 		list_sources();
-		list_devices();
 	}
 
 	~SceneDirectorDock() override { obs_weak_source_release(weak_); }
 
 private:
-	void build_message_row(QGridLayout *g, int row, const QString &label, QComboBox **type, QSpinBox **channel,
-			       QSpinBox **number)
-	{
-		g->addWidget(new QLabel(label), row, 0);
-		*type = new QComboBox();
-		(*type)->addItem(obs_module_text("MidiType.Note"), (int)cd::midi::Type::Note);
-		(*type)->addItem(obs_module_text("MidiType.Cc"), (int)cd::midi::Type::Control);
-		g->addWidget(*type, row, 1);
-		*channel = new QSpinBox();
-		(*channel)->setRange(1, 16);
-		(*channel)->setPrefix(obs_module_text("Ch"));
-		g->addWidget(*channel, row, 2);
-		*number = new QSpinBox();
-		(*number)->setRange(0, 127);
-		(*number)->setPrefix(obs_module_text("Num"));
-		g->addWidget(*number, row, 3);
-	}
-
 	void list_sources()
 	{
 		std::vector<std::string> names;
@@ -242,34 +295,13 @@ private:
 		select_current();
 	}
 
-	void list_devices()
-	{
-		QStringList names;
-		names << obs_module_text("MidiOutDevice.None");
-		for (const director_midi::Device &d : director_midi::output_devices())
-			names << text_of(d.name);
-		QStringList had;
-		for (int i = 0; i < devices_->count(); ++i)
-			had << devices_->itemText(i);
-		if (names == had)
-			return;
-		const QString keep = devices_->currentText();
-		devices_->blockSignals(true);
-		devices_->clear();
-		devices_->addItem(obs_module_text("MidiOutDevice.None"), QString());
-		for (const director_midi::Device &d : director_midi::output_devices())
-			devices_->addItem(text_of(d.name), text_of(d.name));
-		const int at = devices_->findText(keep);
-		devices_->setCurrentIndex(at >= 0 ? at : 0);
-		devices_->blockSignals(false);
-	}
-
 	void select_current()
 	{
 		obs_weak_source_release(weak_);
 		weak_ = nullptr;
 		log_seq_ = 0;
 		log_->clear();
+		ports_loaded_ = false;
 		const QString name = sources_->currentText();
 		if (name.isEmpty())
 			return;
@@ -289,36 +321,44 @@ private:
 		obs_source_release(s);
 	}
 
-	/* ------------------------------------------------------------------------------- push */
-
-	void push_device()
+	/* spec 4.6: equal non-zero send / feedback ports are refused here, never written */
+	void save_ports()
 	{
-		const std::string device = devices_->currentData().toString().toStdString();
-		with_source([&](obs_source_t *s) { sdapi::set_midi_out(s, device); });
+		const int send = send_port_->value();
+		const int fb = feedback_port_->value();
+		if (fb != 0 && fb == send) {
+			port_edit_msg_ = QString(obs_module_text("Dock.PortsEqual")).arg(fb);
+			return;
+		}
+		port_edit_msg_.clear();
+		const std::string host = host_->text().trimmed().toStdString();
+		if (host.empty())
+			return;
+		with_source([&](obs_source_t *s) { sdapi::set_osc(s, host, send, fb); });
+		ports_loaded_ = false; /* re-read what the source applied */
 	}
 
-	void push_triggers()
+	void save_cooldown()
 	{
-		const bool bd = on_breakdown_->isChecked();
-		const bool dr = on_drop_->isChecked();
-		const int cooldown = cooldown_->value();
-		const double lead = (double)lead_->value();
-		with_source([&](obs_source_t *s) { sdapi::set_triggers(s, bd, dr, cooldown, lead); });
+		const int beats = cooldown_->value();
+		bool ok = true;
+		if (have_mapping_[0])
+			ok = sdapi::set_min_interval(kBreakdownId, beats) && ok;
+		if (have_mapping_[1])
+			ok = sdapi::set_min_interval(kDropId, beats) && ok;
+		show_trig_msg(ok ? QString() : QString(obs_module_text("Dock.MapWriteFailed")));
 	}
 
-	void push_messages()
+	void map_result(bool ok, const char *id)
 	{
-		cd::midi::MsgSpec next, prev;
-		next.type = (cd::midi::Type)next_type_->currentData().toInt();
-		next.channel = next_channel_->value();
-		next.number = next_number_->value();
-		prev.type = (cd::midi::Type)prev_type_->currentData().toInt();
-		prev.channel = prev_channel_->value();
-		prev.number = prev_number_->value();
-		with_source([&](obs_source_t *s) { sdapi::set_messages(s, next, prev); });
+		show_trig_msg(ok ? QString() : QString(obs_module_text("Dock.MappingMissing")).arg(id));
 	}
 
-	/* ----------------------------------------------------------------------------- refresh */
+	void show_trig_msg(const QString &msg)
+	{
+		trig_msg_->setText(msg);
+		trig_msg_->setVisible(!msg.isEmpty());
+	}
 
 	void refresh()
 	{
@@ -331,7 +371,7 @@ private:
 		setEnabled(ok || sources_->count() > 0);
 		if (!ok) {
 			clock_->setText(sources_->count() ? "-" : obs_module_text("NoSource"));
-			set_chip(0, obs_module_text("Link.None"));
+			set_chip(0, obs_module_text("OscSending"));
 			return;
 		}
 
@@ -348,41 +388,67 @@ private:
 						"border-radius:3px;")
 						.arg(kSectionColours[sec]));
 
-		/* link chip + device combo */
-		if (!st.midi_available) {
-			set_chip(2, obs_module_text("Link.NoBackend"));
-		} else if (st.midi_device.empty()) {
-			set_chip(0, obs_module_text("Link.None"));
-		} else if (st.midi_open) {
-			set_chip(1, obs_module_text("Link.Open"));
-		} else {
-			set_chip(2, obs_module_text("Link.NotFound"));
+		/* OSC link chip: linked / sending / error (spec 4.6). Error is a socket error or a
+		 * send-queue overflow only; a missed confirmation never turns it red. */
+		switch (st.link_state) {
+		case 1: /* cd::LinkState::Linked */
+			set_chip(1, obs_module_text("OscLinked"));
+			break;
+		case 2: /* cd::LinkState::Error */
+			set_chip(2, obs_module_text("OscError"));
+			break;
+		default:
+			set_chip(0, obs_module_text("OscSending"));
+			break;
 		}
-		chip_->setToolTip(st.midi_open
-					  ? QString(obs_module_text("Link.Open.Tip")).arg(text_of(st.midi_open_name))
-					  : (!st.midi_device.empty() ? QString(obs_module_text("Link.NotFound.Tip"))
-									       .arg(text_of(st.midi_device))
-									       .arg((qulonglong)st.midi_failed)
-								     : QString(obs_module_text("Link.None.Tip"))));
-		const int at = devices_->findData(text_of(st.midi_device));
-		if (at >= 0 && at != devices_->currentIndex() && !devices_->hasFocus()) {
-			devices_->blockSignals(true);
-			devices_->setCurrentIndex(at);
-			devices_->blockSignals(false);
-		}
+		traffic_->setText(QString(obs_module_text("Dock.Traffic"))
+					  .arg((qulonglong)st.sent)
+					  .arg((qulonglong)st.received)
+					  .arg((qulonglong)st.dropped));
 
-		set_check(on_breakdown_, st.trigger_breakdown);
-		set_check(on_drop_, st.trigger_drop);
-		set_spin(cooldown_, std::clamp(st.cooldown_beats, 0, 256));
-		if (lead_->value() != (int)std::lround(st.lead_ms)) {
-			lead_->blockSignals(true);
-			lead_->setValue((int)std::lround(st.lead_ms));
-			lead_->blockSignals(false);
-			lead_label_->setText(QString("%1 ms").arg((int)std::lround(st.lead_ms)));
+		/* host and ports: load from the source until the user edits them */
+		if (!ports_loaded_ && !host_->hasFocus()) {
+			host_->setText(text_of(st.osc_host));
+			ports_loaded_ = true;
 		}
+		sync_spin(send_port_, st.osc_send_port);
+		sync_spin(feedback_port_, st.osc_feedback_port);
+		QString warn;
+		if (!port_edit_msg_.isEmpty())
+			warn = port_edit_msg_;
+		else if (st.port_conflict)
+			warn = QString(obs_module_text("Dock.PortConflict")).arg(st.osc_feedback_port);
+		else if (st.osc_feedback_port != 0 && !st.feedback_bound)
+			warn = QString(obs_module_text("Dock.PortInUse")).arg(st.osc_feedback_port);
+		port_warn_->setText(warn);
+		port_warn_->setVisible(!warn.isEmpty());
 
-		set_msg(next_type_, next_channel_, next_number_, st.next);
-		set_msg(prev_type_, prev_channel_, prev_number_, st.prev);
+		confirm_->setText(QString(obs_module_text("Dock.Confirm"))
+					  .arg(ms_of(st.last_latency_ns))
+					  .arg(ms_of(st.median_latency_ns))
+					  .arg((qlonglong)st.confirmed)
+					  .arg((qlonglong)st.missed)
+					  .arg((qlonglong)st.mismatched)
+					  .arg((qlonglong)st.external));
+
+		/* triggers from the shared event map */
+		const sdapi::Status::MappingInfo *bd = find_mapping(st, kBreakdownId);
+		const sdapi::Status::MappingInfo *dr = find_mapping(st, kDropId);
+		have_mapping_[0] = bd != nullptr;
+		have_mapping_[1] = dr != nullptr;
+		sync_check(breakdown_, bd);
+		sync_check(drop_, dr);
+		cooldown_->setEnabled(bd || dr);
+		if (dr || bd)
+			sync_spin(cooldown_, (dr ? dr : bd)->min_interval_beats);
+		sync_spin(lead_, (int)std::lround(st.lead_ms));
+
+		/* map path + last load summary */
+		map_file_ = text_of(st.map_path);
+		map_path_->setText(map_file_.isEmpty() ? "-" : QFileInfo(map_file_).fileName());
+		map_path_->setToolTip(map_file_);
+		open_dir_->setEnabled(!map_file_.isEmpty());
+		map_summary_->setText(text_of(st.map_summary));
 
 		/* log */
 		if (st.log_seq != log_seq_) {
@@ -396,13 +462,7 @@ private:
 				sb->setValue(sb->maximum());
 			log_seq_ = st.log_seq;
 		}
-		log_head_->setText(QString("%1 (%2)").arg(obs_module_text("Head.Log")).arg(st.switches));
-
-		footer_->setText(QString(obs_module_text("Footer"))
-					 .arg(st.switches)
-					 .arg(text_of(st.last_reason))
-					 .arg(st.last_switch_beat, 0, 'f', 2)
-					 .arg((qulonglong)st.midi_sent));
+		log_head_->setText(QString("%1 (%2)").arg(obs_module_text("Head.Log")).arg((qulonglong)st.switches));
 	}
 
 	void set_chip(int state, const QString &text)
@@ -414,49 +474,19 @@ private:
 				.arg(col));
 	}
 
-	static void set_check(QCheckBox *c, bool on)
-	{
-		if (!c || c->isChecked() == on)
-			return;
-		c->blockSignals(true);
-		c->setChecked(on);
-		c->blockSignals(false);
-	}
-
-	static void set_spin(QSpinBox *s, int value)
-	{
-		if (!s || s->value() == value)
-			return;
-		s->blockSignals(true);
-		s->setValue(value);
-		s->blockSignals(false);
-	}
-
-	static void set_msg(QComboBox *type, QSpinBox *channel, QSpinBox *number, const cd::midi::MsgSpec &m)
-	{
-		if (!type)
-			return;
-		const int at = type->findData((int)m.type);
-		if (at >= 0 && at != type->currentIndex() && !type->hasFocus()) {
-			type->blockSignals(true);
-			type->setCurrentIndex(at);
-			type->blockSignals(false);
-		}
-		if (channel && !channel->hasFocus())
-			set_spin(channel, (int)cd::midi::clamp_channel(m.channel));
-		if (number && !number->hasFocus())
-			set_spin(number, (int)cd::midi::clamp_number(m.number));
-	}
-
 private:
 	obs_weak_source_t *weak_ = nullptr;
-	QComboBox *sources_, *devices_, *next_type_, *prev_type_;
-	QLabel *clock_, *section_, *chip_, *head_, *log_head_, *footer_, *lead_label_;
-	QPushButton *rescan_, *next_btn_, *prev_btn_;
-	QCheckBox *on_breakdown_, *on_drop_;
-	QSpinBox *cooldown_, *next_channel_, *next_number_, *prev_channel_, *prev_number_;
-	QSlider *lead_;
+	QComboBox *sources_;
+	QLabel *clock_, *section_, *chip_, *traffic_, *port_warn_, *confirm_, *trig_msg_, *map_path_, *map_summary_,
+		*log_head_;
+	QLineEdit *host_;
+	QSpinBox *send_port_, *feedback_port_, *cooldown_, *lead_;
+	QPushButton *apply_ports_, *next_btn_, *prev_btn_, *reload_, *open_dir_;
+	QCheckBox *breakdown_, *drop_;
 	QPlainTextEdit *log_;
+	QString map_file_, port_edit_msg_;
+	bool ports_loaded_ = false;
+	bool have_mapping_[2] = {false, false};
 	uint64_t log_seq_ = 0;
 };
 

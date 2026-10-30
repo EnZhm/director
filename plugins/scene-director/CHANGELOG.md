@@ -7,6 +7,50 @@ This repository was called **Clip Director** up to 1.1.0; the plugin was renamed
 Director in 2.0.0, and the repository with it
 ([github.com/EnZhm/scene-director](https://github.com/EnZhm/scene-director)).
 
+## 2.1.0
+
+Part of Director 2.1.0. Scene Director drives Synesthesia over OSC.
+
+- **OSC out** (Synesthesia Pro), through the shared `common/osc` transport: one UDP socket aimed
+  at host:send port (defaults `127.0.0.1`, 7000 = Synesthesia's OSC Input port). Sends are queued
+  with their deadline and leave from a sender thread; no socket call runs on the graphics, audio
+  or UI thread.
+- **OSC feedback** on the feedback port (default 9001 = Synesthesia's OSC Output port, 0 = off).
+  Synesthesia's bundled feedback is decoded; every `/scenes/<name>` is a `scene_loaded` event and
+  goes to the confirmation tracker: `confirm <scene> in <ms> ms`, `no confirmation for <route>
+  after <ms> ms`, `mismatch: sent <a>, Synesthesia reports <b>`, `external scene change: <b>`.
+  Confirmations are best-effort: never resent, never waited on.
+- **Port guard**: a feedback port equal to the send port is refused in the dock; a saved one logs
+  `'<source>': feedback port <p> equals the send port; set Synesthesia's OSC Output port to a
+  different port (default 9001)`, shows an amber warning, and runs without feedback. A feedback
+  port in use is reported the same way and retried every 5 s.
+- **Event map** (`plugin_config/scene-director/event-map.json`, shared by every source): musical
+  events (`breakdown`, `drop`, `groove`, `section`, `phrase`, `bar`, `manual_next`, `manual_prev`,
+  `scene_loaded`) -> OSC actions, with `quantize`, `offset_ms`, `lead`, `min_interval_beats`,
+  `cooldown_group`, `forced_bypass`, `debounce_ms`, typed args and placeholders. The defaults
+  reproduce 2.0: `/playlist/next` on breakdown and drop at `section_beat` minus Scene lead with a
+  16-beat cooldown that forced sections bypass, manual Next / Prev at once. A syntax error keeps
+  the last good map; a bad entry is skipped and logged; a load logs `N mappings, M enabled, K
+  rejected`.
+- **Section sends log** `OSC /playlist/next seq=<S> beat=<B> [<mapping id>]` (was `MIDI Next
+  seq=S beat=B`).
+- **New dock**: OSC link chip (OSC linked / Sending / OSC error), editable host and ports,
+  sent / received / dropped, confirmation latency and counters, Next / Previous, Next on
+  breakdown / Next on drop and Cooldown (editing the event map), Scene lead, the event map path with
+  Reload and Open folder, and the log. The MIDI device picker and message editors are gone.
+- **Settings**: new `osc_host`, `osc_send_port`, `osc_feedback_port`, `confirm_timeout_ms`
+  (100..10000, default 2000). `syn_lead_ms` and `sync_offset_ms` unchanged.
+- **Migration**, logged once per source: Clip Director 1.1's `syn_host` / `syn_send_port` /
+  `syn_feedback_port` seed the OSC settings when those are absent; 2.0's MIDI keys
+  (`midi_out_device`, `next_*`, `prev_*`) are kept verbatim and unused (`'<source>': MIDI out was
+  removed in 2.1; Synesthesia is driven over OSC (<host>:<port>)`); `trigger_breakdown`,
+  `trigger_drop` and `cooldown_beats` are kept and seed the event map on its first write.
+- **Removed: MIDI out.** No virtual MIDI port is needed. The rollback is the Director 2.0.0 zip.
+- Tests: event map parse / validate / defaults / seeding and a byte fuzz, the engine (quantize,
+  offset, lead, cooldown, forced bypass, debounce), the confirmation tracker, settings migration,
+  and the process-wide guard; cross-plugin: one send per event with several sources, equivalence
+  with 2.0's decisions.
+
 ## 2.0.0
 
 Breaking release: the plugin is renamed, the clip pipeline is gone, and the clock is now Music

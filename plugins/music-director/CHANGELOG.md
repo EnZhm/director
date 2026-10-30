@@ -1,5 +1,36 @@
 # Music Director changelog
 
+## 2.1.0
+
+Part of Director 2.1.0.
+
+- **MIDI Director removed.** The MIDI Director dock (`midi-director-dock`), firing arbitrary OBS
+  hotkeys by identity, `common/midi` (MIDI in and out) and the `winmm` link are gone. Music Director
+  has no MIDI in. The archive is tag `2.0.0` (`docs/archive/midi-director.md`).
+- **Hotkeys kept.** Every `md_*` hotkey stays a registered OBS frontend hotkey with its saved
+  binding under `music_director`. `md_drop_now` ("Music Director: Drop now") binds to a key in
+  Settings > Hotkeys or to a Stream Deck button with Stream Deck's OBS hotkey action.
+- **Saved mappings kept.** The scene collection's `midi_director` value is read on load and written
+  back verbatim on save, so a 2.1 save never drops it and a 2.0.0 rollback still finds it. When it
+  holds mappings, Music Director logs once per collection:
+  `[music-director] MIDI Director was removed in 2.1: <N> mappings kept in the scene collection (inactive), copy at <path>`,
+  writes the JSON once to `plugin_config/music-director/midi-director-<collection>.json`, and logs
+  one rebind hint per mapping:
+  `[music-director] MIDI Director mapping '<control>' -> <target> (<label>) is inactive: <hint>`.
+- **Rebind** each control as its hint says:
+
+  | 2.0 mapping target | Hint | In 2.1 |
+  |---|---|---|
+  | `scene_director_next` / `scene_director_prev` | map the control in Synesthesia's MIDI panel | Synesthesia's MIDI panel: devices tab "refresh connected devices", then map the playlist **next** / **previous** in the scenes tab. Scene Director logs the change as `external` |
+  | `md_drop_now` | bind Drop now in Settings > Hotkeys or on a Stream Deck | A key in OBS Settings > Hotkeys, or a Stream Deck button (OBS hotkey action) |
+  | any other hotkey | bind `<label>` in Settings > Hotkeys | A key, or a Stream Deck button |
+
+- OBS's saved dock layout may still name `midi-director-dock`; Qt ignores unknown docks.
+- **`phrase_beat`** in `director_clock`: the beat the current phrase started on (bar lines are
+  `phrase_beat + 4k`). `api_version` stays 1; a follower reading an older Music Director gets 0 and
+  places bars on `beat % 4 == 0`. Tested across a phrase edge, Phrase now and a 16/32 phrase-length
+  change.
+
 ## 2.0.0
 
 Music Director is the new home of the Director suite's music clock, split out of Palette Director

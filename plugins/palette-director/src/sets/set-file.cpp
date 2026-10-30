@@ -612,6 +612,8 @@ extern "C" bool pd_set_parse(const char *json, struct pl_set *out, char *err, si
 			p.mode = PL_MODE_DUOTONE;
 		else
 			return set_err("palette '" + pn + "': unknown mode '" + mode + "'");
+		/* v2.1 palette pool: "pool": false = out of the automatic pool; absent = in (default) */
+		p.in_pool = r.boolean(&pv, "pool", true);
 		const Value *cols = pv.get("colours");
 		if (!cols || cols->type != Value::Type::Array || cols->arr.size() < 2 ||
 		    cols->arr.size() > PL_MAX_COLOURS)
@@ -733,6 +735,8 @@ extern "C" char *pd_set_write(const struct pl_set *s)
 			cols.arr.push_back(V_str(hex));
 		}
 		put(pv, "colours", std::move(cols));
+		if (!p.in_pool)
+			put(pv, "pool", V_bool(false)); /* written ONLY when false (spec 7.1) */
 		pals.arr.push_back(std::move(pv));
 	}
 	put(root, "palettes", std::move(pals));

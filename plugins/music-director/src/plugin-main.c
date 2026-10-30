@@ -26,8 +26,6 @@ OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 extern void music_director_clock_load(void);
 extern void music_director_clock_unload(void);
 extern void music_director_music_dock_load(void);
-extern void music_director_midi_dock_load(void);
-extern void music_director_midi_dock_unload(void);
 
 bool obs_module_load(void)
 {
@@ -37,14 +35,12 @@ bool obs_module_load(void)
 	 * scene-collection settings and the migration, then the docks. */
 	music_director_clock_load();
 	music_director_music_dock_load();
-	music_director_midi_dock_load();
 
 	return true;
 }
 
 void obs_module_unload(void)
 {
-	music_director_midi_dock_unload();
 	music_director_clock_unload();
 	obs_log(LOG_INFO, "plugin unloaded");
 }

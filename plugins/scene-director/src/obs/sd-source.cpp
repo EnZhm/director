@@ -1,18 +1,20 @@
 /*
-Scene Director source: follows Music Director's clock and sends MIDI Next / Prev to a
-virtual MIDI port, so a Synesthesia playlist switches on the beat.
+Scene Director source: follows Music Director's clock and drives Synesthesia's playlist over OSC.
 
 The source renders nothing (0 x 0, a no-op video_render): it is the settings holder for the set. Its
-video tick drives the scheduler, and the Scene Director dock drives the same scheduler from its
+video tick drives the event engine, and the Scene Director dock drives the same engine from its
 refresh timer when the source is not being ticked (a source outside the active scene), so the
-feature works either way. The decision logic itself is pure: core/switch_sched.h.
+feature works either way. The decision logic is pure: core/event_engine.h and core/confirm.h; the
+OSC codec and transport live in common/osc.
 
 One source id is registered: scene_director_source. The old clip_director_source alias is gone -
 Clip Director owns that id now - and the old clip keys in the settings are ignored, never deleted.
+The 2.0 MIDI out is gone (decision 2026-10-30): Synesthesia is driven over OSC only, and the 2.0
+MIDI keys are kept verbatim and never read.
 
 With Music Director missing the source idles: no automatic switches, one log line, and the dock
 reads "Waiting for Music Director". Manual Next / Prev still work. With several Scene Director
-sources sharing the clock, one section edge sends exactly one Next (core/seq_guard.h).
+sources sharing the clock, one section edge sends exactly one Next (a process-wide event guard).
 */
 
 #include <obs-module.h>
@@ -25,20 +27,24 @@ sources sharing the clock, one section edge sends exactly one Next (core/seq_gua
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include "director-clock.h"
 #include "director-follow.h"
-#include "midi_msg.h"
-#include "core/seq_guard.h"
+#include "osc.h"
+#include "osc-transport.h"
+#include "core/confirm.h"
+#include "core/event_engine.h"
+#include "core/event_guard.h"
+#include "core/event_map.h"
 #include "core/settings.h"
-#include "core/switch_sched.h"
 #include "core/types.h"
 #include "obs/sd-api.h"
-#include "director-midi.h"
 
 namespace {
 
@@ -47,42 +53,162 @@ constexpr const char *kSourceId = "scene_director_source";
 // The dock is the main driver; its timer only steps in when the source's own tick has been quiet
 // for this long. Half a frame at 120 fps is enough to tell the two apart.
 constexpr uint64_t kDriveQuietNs = 25ull * 1000000ull;
-constexpr uint64_t kOutputRetryNs = 1000ull * 1000000ull;
 
 // One guard for the whole process: with several Scene Director sources on the one Music Director
-// clock, the first source to claim a section_seq is the one that sends its Next.
-cd::SeqGuard g_seq_guard;
+// clock, the first source to claim an event's (kind, key) is the one that sends.
+cd::EventGuard g_guard;
+
+// The shared event map (one file for every SD source; ports stay per source, decision 2026-10-30).
+std::mutex g_map_mx;
+std::string g_map_path;
+cd::EventMap g_map;
+std::string g_map_summary;
+bool g_map_loaded = false; // a map has been read from disk (or seeded + written)
 
 struct SdSource {
 	obs_source_t *self = nullptr;
 	std::mutex mx;
 
 	cd::SourceConfig cfg;
-	std::unique_ptr<cd::SwitchScheduler> sched;
-	std::unique_ptr<director_midi::Output> out;
+	std::unique_ptr<cd::EventEngine> engine;
+	std::unique_ptr<director_osc::OscTransport> osc;
 	director_follow::Follower follower;
+	cd::ConfirmTracker confirm;
+	cd::SourceClaims claims; // the events this source owns in the process-wide guard
 
 	double beats = 0.0, bpm = 128.0;
 	bool clock_ok = false, clock_state_known = false;
 	cd::Section section = cd::Section::Groove;
 
-	std::string out_want;    // the device the settings last asked for
-	uint64_t drive_ns = 0;   // last time the scheduler ran
-	uint64_t out_try_ns = 0; // last quiet re-open attempt
+	std::string osc_host; // the transport's last applied host/ports
+	int osc_send_port = 0, osc_feedback_port = 0;
+	bool port_conflict = false; // feedback port == send port: transport runs without feedback
+	uint64_t drive_ns = 0;      // last time the scheduler ran
+	uint64_t last_dropped = 0;  // last seen send-queue drop count
 	uint64_t switches = 0;
 	std::string last_reason;
 	double last_switch_beat = 0.0;
+	bool migration_logged = false;
+
+	std::vector<cd::QueuedEvent> queued; // manual / scene_loaded events for the next tick
 
 	std::deque<std::string> log;
 	uint64_t log_seq = 0;
 };
 
-const char *type_name(cd::midi::Type t)
+std::mutex g_sources_mx;
+std::vector<SdSource *> g_sources;
+
+/* ------------------------------------------------------------------------- */
+/* shared event map (spec 4.3)                                                */
+
+std::string map_path()
 {
-	return t == cd::midi::Type::Control ? "CC" : "Note";
+	char *p = obs_module_config_path("event-map.json");
+	std::string s = p ? p : "";
+	bfree(p);
+	return s;
 }
 
-/* mx held: one line for the dock log (and the OBS log) */
+void ensure_parent_dir(const std::string &path)
+{
+	const size_t slash = path.find_last_of("/\\");
+	if (slash == std::string::npos)
+		return;
+	os_mkdirs(path.substr(0, slash).c_str());
+}
+
+bool read_file_text(const std::string &path, std::string &out)
+{
+	std::ifstream in(path, std::ios::binary);
+	if (!in)
+		return false;
+	std::ostringstream ss;
+	ss << in.rdbuf();
+	out = ss.str();
+	return true;
+}
+
+bool write_file_text(const std::string &path, const std::string &text)
+{
+	ensure_parent_dir(path);
+	std::ofstream out(path, std::ios::binary | std::ios::trunc);
+	if (!out)
+		return false;
+	out << text;
+	out.flush();
+	return out.good();
+}
+
+/* g_map_mx held: read event-map.json into g_map. Returns false when the file is missing (the
+ * previous map is left untouched). A syntax error keeps the last good map and logs the reject
+ * (spec 4.3). */
+bool map_read_locked()
+{
+	std::string text;
+	if (!read_file_text(g_map_path, text))
+		return false;
+
+	cd::EventMap candidate;
+	const cd::EventMap::ParseResult r = candidate.parse(text);
+	if (!r.syntax_ok) {
+		obs_log(LOG_WARNING, "[scene-director] event-map.json: %s; keeping the previous map",
+			r.syntax_error.c_str());
+		return true; // kept the previous (or default) map
+	}
+	for (const cd::ParseReject &rej : r.rejects)
+		obs_log(LOG_WARNING, "[scene-director] event-map.json: mapping %zu '%s': %s; skipped", rej.index,
+			rej.id.c_str(), rej.reason.c_str());
+	g_map = candidate;
+	g_map_summary = candidate.summary().text();
+	obs_log(LOG_INFO, "[scene-director] event-map.json: %s", g_map_summary.c_str());
+	return true;
+}
+
+/* g_map_mx held: first-run seeding (spec 4.3): write the default map with the 2.0 trigger keys
+ * applied and adopt it. */
+void map_seed_locked(bool trigger_breakdown, bool trigger_drop, int cooldown_beats)
+{
+	g_map = cd::EventMap::defaults_seeded(trigger_breakdown, trigger_drop, cooldown_beats);
+	g_map_summary = g_map.summary().text();
+	write_file_text(g_map_path, g_map.to_json());
+	g_map_loaded = true;
+	obs_log(LOG_INFO, "[scene-director] event-map.json: %s", g_map_summary.c_str());
+}
+
+/* g_map_mx held: write the map back to disk (only the toggled fields changed; everything else is
+ * preserved verbatim). */
+void map_write_locked()
+{
+	write_file_text(g_map_path, g_map.to_json());
+}
+
+/* g_map_mx held: push the current map into every registered source's engine. */
+void push_map_to_sources()
+{
+	std::lock_guard<std::mutex> sg(g_sources_mx);
+	for (SdSource *c : g_sources) {
+		std::lock_guard<std::mutex> cg(c->mx);
+		c->engine->set_map(g_map);
+	}
+}
+
+void map_init()
+{
+	std::lock_guard<std::mutex> g(g_map_mx);
+	if (!g_map_path.empty())
+		return;
+	g_map_path = map_path();
+	g_map = cd::EventMap::defaults();
+	g_map_summary = g_map.summary().text();
+	if (map_read_locked())
+		g_map_loaded = true; // else: first source seeds + writes below
+}
+
+/* ------------------------------------------------------------------------- */
+/* logging                                                                    */
+
+/* mx held: one line for the dock log (and mirrored to the OBS log by the caller) */
 void note(SdSource *c, const char *fmt, ...)
 {
 	char buf[512];
@@ -90,76 +216,51 @@ void note(SdSource *c, const char *fmt, ...)
 	va_start(ap, fmt);
 	vsnprintf(buf, sizeof(buf), fmt, ap);
 	va_end(ap);
-	char ts[20];
-	snprintf(ts, sizeof(ts), "%8.2f  ", c->beats);
-	c->log.push_back(std::string(ts) + buf);
+	c->log.push_back(buf);
 	if (c->log.size() > 200)
 		c->log.pop_front();
 	c->log_seq++;
 }
 
-/* mx held: make sure the settings' output device is the one we are aiming at */
-void ensure_output(SdSource *c)
+std::string arg_text(const cd::EventArg &a)
 {
-	director_midi::Output &o = *c->out;
-	if (c->cfg.midi_out_device != c->out_want) {
-		c->out_want = c->cfg.midi_out_device;
-		if (c->cfg.midi_out_device.empty()) {
-			o.close();
-			note(c, "MIDI out: none selected");
-			return;
-		}
-		std::string error;
-		if (o.open(c->cfg.midi_out_device, &error)) {
-			note(c, "MIDI out: %s", o.device_name().c_str());
-			obs_log(LOG_INFO, "'%s': MIDI out on '%s'", obs_source_get_name(c->self),
-				o.device_name().c_str());
-		} else {
-			note(c, "MIDI out: %s", error.c_str());
-			obs_log(LOG_WARNING, "'%s': MIDI out: %s", obs_source_get_name(c->self), error.c_str());
-		}
-		return;
+	char buf[48];
+	switch (a.type) {
+	case cd::EventArg::Type::Int:
+		return std::to_string(a.i);
+	case cd::EventArg::Type::Float:
+		std::snprintf(buf, sizeof(buf), "%.6g", (double)a.f);
+		return buf;
+	case cd::EventArg::Type::String:
+		return a.s;
 	}
-	if (o.is_open() || c->out_want.empty())
-		return;
-	const uint64_t now = os_gettime_ns();
-	if (now - c->out_try_ns < kOutputRetryNs)
-		return;
-	c->out_try_ns = now;
-	o.ensure_open(); /* quiet: a virtual port may simply not be running yet */
+	return "";
 }
 
-/* mx held: send one switch as MIDI */
-void send_event(SdSource *c, const cd::SwitchEvent &e)
+std::string args_text(const std::vector<std::string> &args)
 {
-	const bool prev = e.reason == cd::SwitchEvent::Reason::ManualPrev;
-	const cd::midi::MsgSpec &m = prev ? c->cfg.prev : c->cfg.next;
-	const uint32_t bytes = m.wire(127); /* Note: velocity 127; CC: value 127 */
-	bool ok = false;
-	if (m.type == cd::midi::Type::Note) {
-		const uint32_t off = cd::midi::encode_note_off(m.channel, m.number, 0);
-		ok = c->out->send_with_note_off(bytes, off);
-	} else {
-		ok = c->out->send(bytes);
+	std::string s;
+	for (const std::string &a : args) {
+		if (!s.empty())
+			s += " ";
+		s += a;
 	}
-	c->switches++;
-	c->last_reason = e.reason_name();
-	c->last_switch_beat = e.at_beat;
-	note(c, "-> %s %s ch%d #%d  msg 0x%06X  at beat %.2f  [%s]%s%s", prev ? "PREV" : "NEXT", type_name(m.type),
-	     m.channel, m.number, bytes, e.at_beat, e.reason_name(),
-	     e.send_at_beat < e.at_beat - 1e-9 ? " (early)" : "", ok ? "" : " NOT SENT");
-	obs_log(LOG_INFO, "'%s': %s at beat %.3f (send %.3f) %s ch%d #%d msg 0x%06X [%s]%s",
-		obs_source_get_name(c->self), prev ? "PREV" : "NEXT", e.at_beat, e.send_at_beat, type_name(m.type),
-		m.channel, m.number, bytes, e.reason_name(), ok ? "" : " (not sent)");
+	return s;
+}
+
+bool section_event(const std::string &e)
+{
+	return e == "breakdown" || e == "drop" || e == "groove" || e == "section";
 }
 
 /* ------------------------------------------------------------------------- */
 /* clock                                                                      */
 
 /* mx held: read Music Director's clock into a ClockSample. Leaves `valid` false when Music
- * Director is not loaded (no free-running fallback: the scheduler idles). */
+ * Director is not loaded (no free-running fallback: the engine idles). */
 void read_clock(SdSource *c, double seconds, cd::ClockSample &out)
 {
+	(void)seconds; /* frame length no longer matters: sends are deadline-scheduled */
 	director_clock k = {};
 	const bool ok = director_clock_read(&k);
 	if (ok) {
@@ -178,11 +279,114 @@ void read_clock(SdSource *c, double seconds, cd::ClockSample &out)
 	out.epoch = k.epoch;
 	out.beat = k.beat;
 	out.phrase = k.phrase;
-	/* half a frame of lookahead: a switch fires on the frame nearest its beat, not the first one
-	 * after */
-	out.beats = c->beats + (ok ? 0.5 * std::clamp(seconds, 0.0, 0.05) * c->bpm / 60.0 : 0.0);
+	out.phrase_beat = k.phrase_beat;
+	/* No frame lookahead: the engine releases a plan up to 50 ms before its send time and the
+	 * transport holds it to its deadline (spec 4.5), so sends land on time, not on a frame. */
 	out.valid = ok;
 }
+
+/* ------------------------------------------------------------------------- */
+/* feedback                                                                   */
+
+/* mx held: drain the receiver queue. /scenes/{name} -> confirm tracker + scene_loaded event into
+ * the engine; every datagram feeds the 5 s link window (spec 4.6). */
+void drain_feedback(SdSource *c, int64_t now_ns)
+{
+	if (!c->osc || !c->osc->running())
+		return;
+	std::vector<uint8_t> msg;
+	std::vector<director_osc::OscMessage> msgs;
+	while (c->osc->pop(msg)) {
+		/* Any datagram, decodable or not, feeds the link window. Synesthesia sends its feedback
+		 * as OSC bundles; osc_decode_packet unwraps them (and bare messages) in packet order. */
+		c->confirm.on_datagram(now_ns);
+		if (!director_osc::osc_decode_packet(msg, msgs))
+			continue;
+		for (const director_osc::OscMessage &m : msgs) {
+			if (m.address.rfind("/scenes/", 0) != 0 || m.address.size() <= 8)
+				continue;
+			const std::string name = m.address.substr(8);
+			for (const cd::ConfirmEvent &ev : c->confirm.on_scene(name, now_ns)) {
+				obs_log(LOG_INFO, "[scene-director] %s", ev.text.c_str());
+				note(c, "%s", ev.text.c_str());
+			}
+			/* scene_loaded fires even for an external change (spec 4.6, decision A). */
+			cd::QueuedEvent q;
+			q.kind = cd::QueuedEvent::Kind::SceneLoaded;
+			q.scene = name;
+			c->queued.push_back(std::move(q));
+		}
+	}
+}
+
+/* ------------------------------------------------------------------------- */
+/* sends                                                                      */
+
+/* mx held: encode a planned send and enqueue it on the transport with its wall-clock deadline in
+ * the osc_now_ns() domain (spec 4.5). No socket call happens here: send_at only queues. */
+void send_plan(SdSource *c, const cd::PlannedSend &p, int64_t now_ns)
+{
+	if (!c->osc || !c->osc->running()) {
+		note(c, "OSC not started: %s dropped", p.route.c_str());
+		return;
+	}
+
+	director_osc::OscMessage msg;
+	msg.address = p.route;
+	std::vector<std::string> args;
+	for (const cd::EventArg &a : p.args) {
+		if (a.type == cd::EventArg::Type::Int)
+			msg.add(a.i);
+		else if (a.type == cd::EventArg::Type::Float)
+			msg.add(a.f);
+		else
+			msg.add(a.s);
+		args.push_back(arg_text(a));
+	}
+	std::vector<uint8_t> wire;
+	if (!director_osc::osc_encode(msg, wire)) {
+		note(c, "encode failed for %s", p.route.c_str());
+		return;
+	}
+
+	/* The engine released this plan at most 50 ms (the release horizon) before its send time and
+	 * stamped the absolute deadline in the osc_now_ns() domain (now_ns is osc_now_ns()); the
+	 * transport's sender thread holds the datagram until then (spec 4.5). */
+	const uint64_t deadline = p.has_send_at_ns ? (uint64_t)p.send_at_ns : director_osc::osc_now_ns();
+
+	if (!c->osc->send_at(wire.data(), wire.size(), deadline)) {
+		c->confirm.set_error(true);
+		note(c, "OSC send queue overflow: %s", p.route.c_str());
+		obs_log(LOG_WARNING, "[scene-director] send queue overflow: %s", p.route.c_str());
+		return;
+	}
+
+	/* Arm the confirmation expectation for scene-changing sends (spec 4.6). */
+	for (const cd::ConfirmEvent &ev : c->confirm.on_sent(p.route, args, now_ns, c->cfg.confirm_timeout_ms))
+		note(c, "%s", ev.text.c_str());
+
+	c->switches++;
+	c->last_reason = p.mapping_id;
+	c->last_switch_beat = p.target_beat;
+
+	/* Log the send. Section-triggered sends carry seq=<S> beat=<B> (spec 4.6, gate-parser
+	 * compatibility with the 2.0 "MIDI Next seq=S beat=B" line). */
+	const std::string at = args_text(args);
+	std::string line = "OSC " + p.route;
+	if (!at.empty())
+		line += " " + at;
+	if (section_event(p.event)) {
+		const int64_t seq = p.key.empty() ? 0 : std::strtoll(p.key.c_str(), nullptr, 10);
+		line += " seq=" + std::to_string(seq) +
+			" beat=" + std::to_string((long long)std::llround(p.target_beat));
+	}
+	line += " [" + p.mapping_id + "]";
+	obs_log(LOG_INFO, "[scene-director] %s", line.c_str());
+	note(c, "%s", line.c_str());
+}
+
+/* ------------------------------------------------------------------------- */
+/* drive                                                                      */
 
 /* mx held */
 void drive_locked(SdSource *c, double seconds)
@@ -197,14 +401,33 @@ void drive_locked(SdSource *c, double seconds)
 		c->clock_ok = clk.valid;
 		obs_log(LOG_INFO, "[scene-director] %s",
 			clk.valid ? "following Music Director" : "Music Director not found: Synesthesia holds");
+		note(c, "%s", clk.valid ? "following Music Director" : "Music Director not found");
 	}
-	if (!clk.valid)
-		return; /* idle: no automatic switches (manual Next / Prev still work) */
+
+	const int64_t now_ns = (int64_t)director_osc::osc_now_ns();
+
+	drain_feedback(c, now_ns);
+
+	/* expire confirmation deadlines -> "no confirmation" */
+	for (const cd::ConfirmEvent &ev : c->confirm.tick(now_ns)) {
+		obs_log(LOG_WARNING, "[scene-director] %s", ev.text.c_str());
+		note(c, "%s", ev.text.c_str());
+	}
+
+	/* a send-queue overflow surfaced since last tick is an error (spec 4.6) */
+	if (c->osc && c->osc->running()) {
+		const uint64_t d = c->osc->dropped();
+		if (d != c->last_dropped) {
+			c->last_dropped = d;
+			c->confirm.set_error(true);
+		}
+	}
 
 	director_follow::Sample s;
 	s.ok = clk.valid;
 	s.beat = clk.beat;
 	s.phrase = clk.phrase;
+	s.phrase_beat = clk.phrase_beat;
 	s.section = (int)clk.section;
 	s.section_seq = clk.section_seq;
 	s.section_beat = clk.section_beat;
@@ -212,36 +435,35 @@ void drive_locked(SdSource *c, double seconds)
 	s.epoch = clk.epoch;
 	const director_follow::Edges e = c->follower.update(s);
 
-	ensure_output(c);
-	if (e.resync) {
-		/* first sample, Music Director found again, or an epoch change: re-anchor, no edge */
-		c->sched->resync(clk);
-		return;
-	}
-	for (const cd::SwitchEvent &ev : c->sched->tick(clk)) {
-		/* one section edge, one Next across every Scene Director source */
-		if (ev.section_edge && !g_seq_guard.claim(ev.section_seq)) {
-			obs_log(LOG_DEBUG, "'%s': section seq %lld already sent by another source; skip",
-				obs_source_get_name(c->self), (long long)ev.section_seq);
+	std::vector<cd::QueuedEvent> queued;
+	queued.swap(c->queued);
+
+	std::vector<cd::PlannedSend> plans;
+	if (clk.valid)
+		plans = c->engine->tick(clk, e, queued, now_ns);
+	else if (!queued.empty())
+		plans = c->engine->tick(clk, {}, queued, now_ns); /* manual events still send without MD */
+
+	for (const cd::PlannedSend &p : plans) {
+		/* exactly-once across every Scene Director source: the first source to claim an event owns
+		 * it and sends ALL of its own plans for it (several actions / mappings); other sources skip.
+		 * Manual presses and scene_loaded carry an empty key and are always this source's own. */
+		if (!c->claims.may_send(g_guard, p.event, p.key)) {
+			obs_log(LOG_DEBUG, "'%s': %s key %s owned by another source; skip",
+				obs_source_get_name(c->self), p.event.c_str(), p.key.c_str());
 			continue;
 		}
-		if (ev.section_edge)
-			obs_log(LOG_INFO, "[scene-director] MIDI Next seq=%lld beat=%lld", (long long)ev.section_seq,
-				(long long)ev.section_beat);
-		send_event(c, ev);
+		send_plan(c, p, now_ns);
 	}
 }
 
 /* mx held: a manual switch, from the dock or a hotkey */
 void manual_locked(SdSource *c, bool prev)
 {
-	cd::ClockSample clk;
-	clk.valid = true;
-	clk.beats = c->beats;
-	clk.bpm = c->bpm;
-	clk.section = c->section;
-	const cd::SwitchEvent e = prev ? c->sched->manual_prev(clk) : c->sched->manual_next(clk);
-	send_event(c, e);
+	cd::QueuedEvent q;
+	q.kind = prev ? cd::QueuedEvent::Kind::ManualPrev : cd::QueuedEvent::Kind::ManualNext;
+	c->queued.push_back(std::move(q));
+	drive_locked(c, 1.0 / 60.0); /* fire immediately (debounce applies in the engine) */
 }
 
 /* ------------------------------------------------------------------------- */
@@ -254,17 +476,10 @@ void sd_defaults(obs_data_t *s)
 	obs_data_set_default_string(s, "clock_source", "");
 	obs_data_set_default_int(s, "sync_offset_ms", 0);
 
-	obs_data_set_default_string(s, "midi_out_device", "");
-	obs_data_set_default_string(s, "next_type", "note");
-	obs_data_set_default_int(s, "next_channel", 16);
-	obs_data_set_default_int(s, "next_number", 60);
-	obs_data_set_default_string(s, "prev_type", "note");
-	obs_data_set_default_int(s, "prev_channel", 16);
-	obs_data_set_default_int(s, "prev_number", 59);
-
-	obs_data_set_default_bool(s, "trigger_breakdown", true);
-	obs_data_set_default_bool(s, "trigger_drop", true);
-	obs_data_set_default_int(s, "cooldown_beats", 16);
+	obs_data_set_default_string(s, "osc_host", "127.0.0.1");
+	obs_data_set_default_int(s, "osc_send_port", 7000);
+	obs_data_set_default_int(s, "osc_feedback_port", 9001);
+	obs_data_set_default_int(s, "confirm_timeout_ms", 2000);
 	obs_data_set_default_double(s, "syn_lead_ms", 0.0);
 }
 
@@ -281,17 +496,76 @@ cd::SourceConfig read_settings(obs_data_t *s)
 	return cd::read_config(st);
 }
 
+/* mx held: the migration log lines (spec 4.1), once per source. */
+void log_migration(SdSource *c, const cd::SourceConfig &n)
+{
+	if (c->migration_logged)
+		return;
+	c->migration_logged = true;
+	const char *name = obs_source_get_name(c->self);
+	/* the syn_* -> osc_* seeding is persisted and logged by persist_seeded_osc() in create */
+	if (n.midi_out_present)
+		obs_log(LOG_INFO,
+			"[scene-director] '%s': MIDI out was removed in 2.1; Synesthesia is driven over OSC (%s:%d)",
+			name, n.osc_host.c_str(), n.osc_send_port);
+}
+
+/* mx held: does the transport need a (re)start for the current config? */
+bool transport_stale(const SdSource *c)
+{
+	return !c->osc || !c->osc->running() || c->osc_host != c->cfg.osc_host ||
+	       c->osc_send_port != c->cfg.osc_send_port || c->osc_feedback_port != c->cfg.osc_feedback_port;
+}
+
+/* mx held: start a fresh transport for the current config. */
+void start_transport_locked(SdSource *c)
+{
+	c->osc = std::make_unique<director_osc::OscTransport>();
+	c->last_dropped = 0;
+	std::string err;
+	/* Spec 4.6 port guard: with feedback == send, run without a feedback socket; sends continue. */
+	const int feedback_port = cd::port_conflict(c->cfg) ? 0 : c->cfg.osc_feedback_port;
+	if (!c->osc->start(c->cfg.osc_host, c->cfg.osc_send_port, feedback_port, &err)) {
+		obs_log(LOG_WARNING, "'%s': OSC transport: %s", obs_source_get_name(c->self), err.c_str());
+		note(c, "OSC: %s", err.c_str());
+		c->confirm.set_error(true);
+		return;
+	}
+	c->confirm.set_error(false);
+	c->osc_host = c->cfg.osc_host;
+	c->osc_send_port = c->cfg.osc_send_port;
+	c->osc_feedback_port = c->cfg.osc_feedback_port;
+	obs_log(LOG_INFO, "'%s': OSC -> %s:%d (feedback %d)", obs_source_get_name(c->self), c->cfg.osc_host.c_str(),
+		c->cfg.osc_send_port, c->cfg.osc_feedback_port);
+}
+
+/* Applies settings. The transport is (re)started only from create/update (UI thread), never from
+ * video_tick (spec 4.5). A running transport is stopped OUTSIDE mx: stop() joins two threads (up to
+ * ~250 ms) and must never hold up video_tick, which takes the same mutex. The old transport is
+ * stopped before the new one starts so the feedback port is free to bind again; sends planned in
+ * that short window are logged as dropped. */
 void apply(SdSource *c, obs_data_t *settings)
 {
 	const cd::SourceConfig n = read_settings(settings);
+	std::unique_ptr<director_osc::OscTransport> old;
+	{
+		std::lock_guard<std::mutex> g(c->mx);
+		c->cfg = n;
+		c->engine->set_lead_ms(n.lead_ms);
+		log_migration(c, n);
+		c->port_conflict = cd::port_conflict(n);
+		if (c->port_conflict) /* once per settings change (create/update), never per tick */
+			obs_log(LOG_WARNING, "[scene-director] %s",
+				cd::port_conflict_text(obs_source_get_name(c->self), n.osc_feedback_port).c_str());
+		if (!transport_stale(c))
+			return;
+		old = std::move(c->osc); /* c->osc is null until restarted: drain/send skip it */
+	}
+	if (old)
+		old->stop();
 	std::lock_guard<std::mutex> g(c->mx);
-	c->cfg = n;
-	cd::SwitchConfig sc;
-	sc.trigger_breakdown = n.trigger_breakdown;
-	sc.trigger_drop = n.trigger_drop;
-	sc.cooldown_beats = n.cooldown_beats;
-	sc.lead_ms = n.lead_ms;
-	c->sched->set_config(sc);
+	if (transport_stale(c))
+		start_transport_locked(c);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -302,14 +576,47 @@ const char *sd_name(void *)
 	return obs_module_text("SceneDirector");
 }
 
+/* Migration (spec 4.1): when osc_* are absent and Clip Director 1.1's syn_* are present, the
+ * seeded values are written into the source's own settings (only the absent osc_* keys; syn_* stay
+ * verbatim), so the properties dialog shows what the transport uses and later edits start from
+ * them. Logged once, here. */
+void persist_seeded_osc(obs_source_t *source, obs_data_t *settings)
+{
+	const cd::SourceConfig n = read_settings(settings);
+	if (!n.osc_seeded)
+		return;
+	if (!obs_data_has_user_value(settings, "osc_host"))
+		obs_data_set_string(settings, "osc_host", n.osc_host.c_str());
+	if (!obs_data_has_user_value(settings, "osc_send_port"))
+		obs_data_set_int(settings, "osc_send_port", n.osc_send_port);
+	if (!obs_data_has_user_value(settings, "osc_feedback_port"))
+		obs_data_set_int(settings, "osc_feedback_port", n.osc_feedback_port);
+	obs_log(LOG_INFO, "[scene-director] '%s': OSC ports from Clip Director 1.1 settings: %s %d/%d",
+		obs_source_get_name(source), n.osc_host.c_str(), n.osc_send_port, n.osc_feedback_port);
+}
+
 void *sd_create(obs_data_t *settings, obs_source_t *source)
 {
 	SdSource *c = new SdSource();
 	c->self = source;
-	c->out = std::make_unique<director_midi::Output>();
-	c->sched = std::make_unique<cd::SwitchScheduler>();
+	c->engine = std::make_unique<cd::EventEngine>(cd::EventMap::defaults(), 0.0);
+	c->engine->set_release_horizon_ms(50.0); /* spec 4.5: release within 50 ms, deadline-scheduled */
+	persist_seeded_osc(source, settings);
 	apply(c, settings);
-	obs_log(LOG_INFO, "'%s': source ready (renders nothing: it holds the set and drives MIDI)",
+
+	/* Register and adopt the map under g_map_mx (lock order g_map_mx -> g_sources_mx -> c->mx), so a
+	 * reload or a dock toggle can never fall between adopting the map and joining g_sources. The
+	 * first source to arrive writes the seeded default map (spec 4.3). */
+	{
+		std::lock_guard<std::mutex> mg(g_map_mx);
+		if (!g_map_loaded)
+			map_seed_locked(c->cfg.trigger_breakdown, c->cfg.trigger_drop, c->cfg.cooldown_beats);
+		std::lock_guard<std::mutex> sg(g_sources_mx);
+		g_sources.push_back(c);
+		std::lock_guard<std::mutex> cg(c->mx);
+		c->engine->set_map(g_map);
+	}
+	obs_log(LOG_INFO, "'%s': source ready (renders nothing: it drives Synesthesia over OSC)",
 		obs_source_get_name(source));
 	return c;
 }
@@ -318,9 +625,16 @@ void sd_destroy(void *data)
 {
 	SdSource *c = static_cast<SdSource *>(data);
 	{
-		std::lock_guard<std::mutex> g(c->mx);
-		c->out->close(); /* stops the note-off worker before anything else is freed */
+		std::lock_guard<std::mutex> g(g_sources_mx);
+		g_sources.erase(std::remove(g_sources.begin(), g_sources.end(), c), g_sources.end());
 	}
+	std::unique_ptr<director_osc::OscTransport> osc;
+	{
+		std::lock_guard<std::mutex> g(c->mx);
+		osc = std::move(c->osc);
+	}
+	if (osc)
+		osc->stop(); /* stop the transport before anything else is freed (spec 4.5) */
 	delete c;
 }
 
@@ -353,24 +667,6 @@ void sd_tick(void *data, float seconds)
 	drive_locked(c, std::clamp((double)seconds, 0.0, 0.25));
 }
 
-void add_type_list(obs_properties_t *pr, const char *key, const char *label)
-{
-	obs_property_t *p = obs_properties_add_list(pr, key, label, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(p, obs_module_text("MidiType.Note"), "note");
-	obs_property_list_add_string(p, obs_module_text("MidiType.Cc"), "cc");
-}
-
-bool on_refresh_devices(obs_properties_t *props, obs_property_t *, void *)
-{
-	obs_property_t *p = obs_properties_get(props, "midi_out_device");
-	if (p)
-		obs_property_list_clear(p);
-	obs_property_list_add_string(p, obs_module_text("MidiOutDevice.None"), "");
-	for (const director_midi::Device &d : director_midi::output_devices())
-		obs_property_list_add_string(p, d.name.c_str(), d.name.c_str());
-	return true;
-}
-
 obs_properties_t *sd_properties(void *)
 {
 	obs_properties_t *pr = obs_properties_create();
@@ -381,27 +677,14 @@ obs_properties_t *sd_properties(void *)
 	obs_properties_add_int_slider(ck, "sync_offset_ms", obs_module_text("SyncOffset"), -200, 200, 1);
 	obs_properties_add_group(pr, "g_clock", obs_module_text("Group.Clock"), OBS_GROUP_NORMAL, ck);
 
-	obs_properties_t *mi = obs_properties_create();
-	obs_property_t *dev = obs_properties_add_list(mi, "midi_out_device", obs_module_text("MidiOutDevice"),
-						      OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(dev, obs_module_text("MidiOutDevice.None"), "");
-	for (const director_midi::Device &d : director_midi::output_devices())
-		obs_property_list_add_string(dev, d.name.c_str(), d.name.c_str());
-	obs_properties_add_button2(mi, "midi_rescan", obs_module_text("MidiRescan"), on_refresh_devices, nullptr);
-	add_type_list(mi, "next_type", obs_module_text("MidiNext"));
-	obs_properties_add_int(mi, "next_channel", obs_module_text("MidiChannel"), 1, 16, 1);
-	obs_properties_add_int(mi, "next_number", obs_module_text("MidiNumber"), 0, 127, 1);
-	add_type_list(mi, "prev_type", obs_module_text("MidiPrev"));
-	obs_properties_add_int(mi, "prev_channel", obs_module_text("MidiChannel"), 1, 16, 1);
-	obs_properties_add_int(mi, "prev_number", obs_module_text("MidiNumber"), 0, 127, 1);
-	obs_properties_add_group(pr, "g_midi", obs_module_text("Group.Midi"), OBS_GROUP_NORMAL, mi);
+	obs_properties_t *os = obs_properties_create();
+	obs_properties_add_text(os, "osc_host", obs_module_text("OscHost"), OBS_TEXT_DEFAULT);
+	obs_properties_add_int(os, "osc_send_port", obs_module_text("OscSendPort"), 1, 65535, 1);
+	obs_properties_add_int(os, "osc_feedback_port", obs_module_text("OscFeedbackPort"), 0, 65535, 1);
+	obs_properties_add_int(os, "confirm_timeout_ms", obs_module_text("ConfirmTimeout"), 100, 10000, 10);
+	obs_properties_add_int_slider(os, "syn_lead_ms", obs_module_text("SceneLead"), 0, 500, 10);
+	obs_properties_add_group(pr, "g_osc", obs_module_text("Group.Osc"), OBS_GROUP_NORMAL, os);
 
-	obs_properties_t *tr = obs_properties_create();
-	obs_properties_add_bool(tr, "trigger_breakdown", obs_module_text("Trigger.Breakdown"));
-	obs_properties_add_bool(tr, "trigger_drop", obs_module_text("Trigger.Drop"));
-	obs_properties_add_int(tr, "cooldown_beats", obs_module_text("Cooldown"), 0, 256, 1);
-	obs_properties_add_int_slider(tr, "syn_lead_ms", obs_module_text("SceneLead"), 0, 500, 10);
-	obs_properties_add_group(pr, "g_triggers", obs_module_text("Group.Triggers"), OBS_GROUP_NORMAL, tr);
 	return pr;
 }
 
@@ -446,6 +729,7 @@ template<typename F> void write_settings(obs_source_t *src, F &&fn)
 
 extern "C" void scene_director_source_load(void)
 {
+	map_init();
 	register_source(kSourceId);
 }
 
@@ -464,29 +748,50 @@ bool status(obs_source_t *src, Status &o)
 	SdSource *c = sd_of(src);
 	if (!c)
 		return false;
-	std::lock_guard<std::mutex> g(c->mx);
 	o = Status();
+	/* read the map info without holding c->mx, to keep a single lock order (g_map_mx first). */
+	{
+		std::lock_guard<std::mutex> g(g_map_mx);
+		o.map_path = g_map_path;
+		o.map_summary = g_map_summary;
+		for (const cd::Mapping &m : g_map.mappings()) {
+			Status::MappingInfo mi;
+			mi.id = m.id;
+			mi.event = m.event;
+			mi.enabled = m.enabled;
+			mi.min_interval_beats = m.min_interval_beats;
+			o.mappings.push_back(std::move(mi));
+		}
+	}
+	std::lock_guard<std::mutex> g(c->mx);
 	o.clock_following = c->clock_ok;
 	o.bpm = c->bpm;
 	o.beats = c->beats;
 	o.section = (int)c->section;
 
-	o.midi_available = director_midi::available();
-	o.midi_open = c->out->is_open();
-	o.midi_device = c->cfg.midi_out_device;
-	o.midi_open_name = c->out->device_name();
-	o.midi_failed = c->out->failed_lookups();
-	o.midi_sent = c->out->sent();
+	const int64_t now_ns = (int64_t)director_osc::osc_now_ns();
+	o.link_state = (int)c->confirm.link_state(now_ns);
+	o.osc_host = c->cfg.osc_host;
+	o.osc_send_port = c->cfg.osc_send_port;
+	o.osc_feedback_port = c->cfg.osc_feedback_port;
+	o.feedback_bound = c->osc ? c->osc->feedback_bound() : false;
+	o.port_conflict = c->port_conflict;
+	o.sent = c->osc ? c->osc->sent() : 0;
+	o.received = c->osc ? c->osc->received() : 0;
+	o.dropped = c->osc ? c->osc->dropped() : 0;
 
-	const cd::SwitchConfig &sc = c->sched->config();
-	o.trigger_breakdown = sc.trigger_breakdown;
-	o.trigger_drop = sc.trigger_drop;
-	o.cooldown_beats = sc.cooldown_beats;
-	o.lead_ms = sc.lead_ms;
-	o.last_switch_beat = c->sched->last_switch_beat();
+	const cd::ConfirmCounters &cc = c->confirm.counters();
+	o.confirmed = cc.confirmed;
+	o.missed = cc.missed;
+	o.mismatched = cc.mismatched;
+	o.external = cc.external;
+	o.last_latency_ns = c->confirm.last_latency_ns();
+	o.median_latency_ns = c->confirm.median_latency_ns();
+	o.p90_latency_ns = c->confirm.p90_latency_ns();
 
-	o.next = c->cfg.next;
-	o.prev = c->cfg.prev;
+	o.lead_ms = c->cfg.lead_ms;
+	o.confirm_timeout_ms = c->cfg.confirm_timeout_ms;
+	o.last_switch_beat = c->last_switch_beat;
 	o.last_reason = c->last_reason;
 	o.switches = c->switches;
 
@@ -495,30 +800,51 @@ bool status(obs_source_t *src, Status &o)
 	return true;
 }
 
-void set_midi_out(obs_source_t *src, const std::string &device)
+bool reload_map(std::string *error)
 {
-	write_settings(src, [&](obs_data_t *s) { obs_data_set_string(s, "midi_out_device", device.c_str()); });
+	std::lock_guard<std::mutex> g(g_map_mx);
+	if (map_read_locked()) {
+		push_map_to_sources();
+		return true;
+	}
+	if (error)
+		*error = "event-map.json not found";
+	obs_log(LOG_WARNING, "[scene-director] event-map.json: not found; keeping the previous map");
+	return false;
 }
 
-void set_messages(obs_source_t *src, const cd::midi::MsgSpec &next, const cd::midi::MsgSpec &prev)
+bool set_mapping_enabled(const std::string &id, bool enabled)
 {
-	write_settings(src, [&](obs_data_t *s) {
-		obs_data_set_string(s, "next_type", cd::midi::type_to_string(next.type));
-		obs_data_set_int(s, "next_channel", (int)cd::midi::clamp_channel(next.channel));
-		obs_data_set_int(s, "next_number", (int)cd::midi::clamp_number(next.number));
-		obs_data_set_string(s, "prev_type", cd::midi::type_to_string(prev.type));
-		obs_data_set_int(s, "prev_channel", (int)cd::midi::clamp_channel(prev.channel));
-		obs_data_set_int(s, "prev_number", (int)cd::midi::clamp_number(prev.number));
-	});
+	std::lock_guard<std::mutex> g(g_map_mx);
+	if (!g_map.set_enabled(id, enabled))
+		return false;
+	map_write_locked();
+	push_map_to_sources();
+	return true;
 }
 
-void set_triggers(obs_source_t *src, bool breakdown, bool drop, int cooldown_beats, double lead_ms)
+bool set_min_interval(const std::string &id, int beats)
+{
+	std::lock_guard<std::mutex> g(g_map_mx);
+	if (!g_map.set_min_interval_beats(id, beats))
+		return false;
+	map_write_locked();
+	push_map_to_sources();
+	return true;
+}
+
+void set_scene_lead(obs_source_t *src, double lead_ms)
+{
+	write_settings(src,
+		       [&](obs_data_t *s) { obs_data_set_double(s, "syn_lead_ms", std::clamp(lead_ms, 0.0, 500.0)); });
+}
+
+void set_osc(obs_source_t *src, const std::string &host, int send_port, int feedback_port)
 {
 	write_settings(src, [&](obs_data_t *s) {
-		obs_data_set_bool(s, "trigger_breakdown", breakdown);
-		obs_data_set_bool(s, "trigger_drop", drop);
-		obs_data_set_int(s, "cooldown_beats", std::clamp(cooldown_beats, 0, 4096));
-		obs_data_set_double(s, "syn_lead_ms", std::clamp(lead_ms, 0.0, 500.0));
+		obs_data_set_string(s, "osc_host", host.c_str());
+		obs_data_set_int(s, "osc_send_port", std::clamp(send_port, 1, 65535));
+		obs_data_set_int(s, "osc_feedback_port", std::clamp(feedback_port, 0, 65535));
 	});
 }
 

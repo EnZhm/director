@@ -19,6 +19,9 @@ Check `api_version` >= 1.
       out int   beat            integer beat
       out int   phrase          phrase counter
       out int   phrase_beats    16 | 32
+      out int   phrase_beat     the beat the current phrase started on: bar lines are
+                                phrase_beat + 4k. A follower reading a Music Director that predates
+                                this field reads 0 and treats bars as beat % 4 == 0.
       out int   section         DIRECTOR_CLOCK_SECTION_*
       out int   section_seq     +1 on EVERY section change, natural or forced. A follower acts on a
                                 section change exactly once: when section_seq differs from the last
@@ -74,6 +77,7 @@ struct director_clock {
 	double beats, beats_now, bpm, confidence, bass;
 	long long beat, phrase, section_seq, section_beat, epoch, kicks, sample_ts_ns, now_ns;
 	int phrase_beats, section, ts_source;
+	long long phrase_beat; /* 0 = the Music Director predates the field: bars are beat % 4 == 0 */
 	bool section_forced, silent, paused, enabled;
 };
 
@@ -99,6 +103,7 @@ static inline bool director_clock_read(struct director_clock *out)
 		out->beat = calldata_int(&cd, "beat");
 		out->phrase = calldata_int(&cd, "phrase");
 		out->phrase_beats = (int)calldata_int(&cd, "phrase_beats");
+		out->phrase_beat = calldata_int(&cd, "phrase_beat");
 		out->section = (int)calldata_int(&cd, "section");
 		out->section_seq = calldata_int(&cd, "section_seq");
 		out->section_beat = calldata_int(&cd, "section_beat");

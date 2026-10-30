@@ -1,21 +1,21 @@
-Director 2.0.0 for OBS Studio 32.2.x (Windows x64)
+Director 2.1.0 for OBS Studio 32.2.x (Windows x64)
 =================================================
 
 Director is four OBS plugins driven by the DJ mix. Music Director listens to the
 mix and keeps the one beat clock. Palette Director (palettes), Clip Director
-(video clips) and Scene Director (Synesthesia playlist over MIDI) follow it, so a
-breakdown or a drop changes the palette, cuts the clip and moves the Synesthesia
-playlist on the same beat.
+(video clips) and Scene Director (Synesthesia over OSC) follow it, so a
+breakdown or a drop changes the palette, cuts the clip and switches the
+Synesthesia scene on the same beat.
 
-Every plugin in this zip is version 2.0.0.
+Every plugin in this zip is version 2.1.0.
 
 
 1. What is in this zip
 ----------------------
-  music-director/     the clock, the Music dock, the MIDI Director dock
+  music-director/     the clock, the Music dock, the md_* hotkeys
   palette-director/   the Palette Lock filter and the Palette Director dock
   clip-director/      the Clip Director source and dock
-  scene-director/     the Scene Director source and dock (MIDI out to Synesthesia)
+  scene-director/     the Scene Director source and dock (OSC to Synesthesia)
   INSTALL.txt         this file
   LICENSE             GPL-2.0
   SHA256SUMS.txt      checksums of every file in the four plugin folders
@@ -26,9 +26,11 @@ Every plugin in this zip is version 2.0.0.
   - Windows 10 or 11, 64-bit.
   - OBS Studio 32.2.x (all four plugins are built against 32.2.2).
   - The DJ mix as one OBS audio source (an "Audio Input Capture" is enough).
-  - For Synesthesia: a Spout input for the OBS picture, MIDI input for the
-    playlist, and a virtual MIDI port (loopMIDI, or a Windows MIDI Services
-    loopback pair).
+  - For Synesthesia: Synesthesia Pro (OSC is a Pro feature; tested with
+    1.25.4.189) and a Spout input for the OBS picture. No virtual MIDI port
+    is needed.
+  - Optional: a keyboard or a Stream Deck for Drop now and the other Director
+    hotkeys; a MIDI controller mapped in Synesthesia's own MIDI panel.
 
 Palette Director, Clip Director and Scene Director need Music Director. Without
 it they idle: no crash, one log line, and their dock says "Waiting for Music
@@ -42,8 +44,10 @@ Director".
        C:\ProgramData\obs-studio\plugins\palette-director
        C:\ProgramData\obs-studio\plugins\clip-director
        C:\ProgramData\obs-studio\plugins\scene-director
+     Upgrading from 2.0: keep director-2.0.0-windows-x64.zip for a rollback
+     (section 8), then go on.
   3. Copy the four folders from this zip into C:\ProgramData\obs-studio\plugins\
-     so that these files exist:
+     (replace the files already there) so that these files exist:
        C:\ProgramData\obs-studio\plugins\music-director\bin\64bit\music-director.dll
        C:\ProgramData\obs-studio\plugins\palette-director\bin\64bit\palette-director.dll
        C:\ProgramData\obs-studio\plugins\clip-director\bin\64bit\clip-director.dll
@@ -52,28 +56,13 @@ Director".
      unzipped folder:
        Get-FileHash -Algorithm SHA256 .\music-director\bin\64bit\music-director.dll
   5. Start OBS. Help > Log Files > View Current Log shows, once per plugin:
-       [music-director] plugin loaded successfully (version 2.0.0)
-       [palette-director] plugin loaded successfully (version 2.0.0)
-       [clip-director] plugin loaded successfully (version 2.0.0)
-       [scene-director] plugin loaded successfully (version 2.0.0)
+       [music-director] plugin loaded successfully (version 2.1.0)
+       [palette-director] plugin loaded successfully (version 2.1.0)
+       [clip-director] plugin loaded successfully (version 2.1.0)
+       [scene-director] plugin loaded successfully (version 2.1.0)
 
 
-4. What carries over from 1.x
------------------------------
-  - Palette Lock filters, palettes and sets load exactly as saved, spectrum
-    palettes included.
-  - Audio settings move to Music Director on first load: the audio source, input
-    gain, kick sensitivity, fallback BPM, phrase length and any bound clock
-    hotkeys, taken from the first enabled Palette Lock filter that has an audio
-    source. The log line "[music-director] migrated audio settings from ..."
-    names the filter it used.
-  - Clip Director sources load unchanged.
-  - MIDI Director mappings load unchanged, now in Music Director. Mappings that
-    targeted Clip Director 1.1's Synesthesia OSC hotkeys (cd_syn_*) have nothing
-    to press: map those controls to scene_director_next / scene_director_prev.
-
-
-5. First run
+4. First run
 ------------
   1. Music Director dock: pick the mix as the audio source. The BPM, the beat
      lights and the section (GROOVE / BREAKDOWN / DROP) follow the music.
@@ -81,36 +70,125 @@ Director".
      choose a set in the Palette Director dock (the bundled set is Neon Default).
   3. Add a "Clip Director" source with your clip folders, tagged Groove,
      Breakdown or Drop. For Synesthesia, put a Spout Filter on it.
-  4. Add a "Scene Director" source and pick the virtual MIDI port as its MIDI out
-     (dock > MIDI out > Rescan > the port).
+  4. Add a "Scene Director" source and set up Synesthesia's OSC (section 5).
   5. Test without music: Force breakdown and Drop now in the Music Director dock
      change the palette, cut the clip and send the Synesthesia Next on the next
      beat.
 
 
-6. Synesthesia playlist: Next and Prev
---------------------------------------
-  1. In Synesthesia's MIDI settings, enable the virtual port as a MIDI input.
-  2. In Synesthesia's MIDI mapping, MIDI-learn the playlist's "next" control, then
-     press Next in the Scene Director dock.
-  3. Do the same for "previous" with Prev, then save Synesthesia's mapping.
-  Breakdowns and drops then send Next by themselves. Automatic section changes
-  respect a 16-beat cooldown; forced sections and Next / Prev from the buttons,
-  the hotkeys or MIDI always go through.
+5. Synesthesia: OSC setup
+-------------------------
+Scene Director sends to Synesthesia's OSC input and listens on Synesthesia's OSC
+output for scene confirmations. In Synesthesia, open Settings > OSC:
+
+  1. Input: on.   Input port: 7000   (= Scene Director's Send port)
+  2. Output: on.  Output address: 127.0.0.1
+                  Output port: 9001  (= Scene Director's Feedback port)
+  3. The Output port must NOT be the Input port. A freshly configured
+     Synesthesia can have its output pointed at its own input; it then sends
+     its feedback into itself and Scene Director never sees a confirmation.
+  4. "Output controls" and "Output audio variables" are not needed: scene
+     feedback arrives without them.
+
+In OBS, the Scene Director dock shows Host 127.0.0.1, Send 7000, Feedback 9001
+by default. If Synesthesia uses other ports, enter them and press Apply (the
+dock refuses a feedback port equal to the send port).
+
+Press Next in the dock: the Synesthesia playlist moves on and the link chip
+turns green.
+
+  Link chip     OSC linked (green): Synesthesia's feedback arrived in the last
+                5 seconds, or a send was confirmed.
+                Sending (grey): sends go out, no feedback seen yet. Check
+                Synesthesia's Output setting and port. Sends still work.
+                OSC error (red): a socket error or a send queue overflow.
+  Amber line    "Feedback port equals the send port": set Synesthesia's OSC
+                Output port to a different port (default 9001). Scene
+                Director keeps sending, without feedback.
+                "Feedback port N is in use": another program holds the port;
+                Scene Director keeps sending and retries every 5 seconds.
+
+Confirmations are best-effort. Synesthesia does not answer every command, so a
+missed confirmation does not mean the scene did not change. Scene Director
+counts the miss and never resends.
+
+Breakdowns and drops send Next by themselves. Automatic section changes respect
+a 16-beat cooldown; forced sections (Force breakdown, Drop now) and Next / Prev
+from the buttons or the hotkeys always go through.
+
+Troubleshooting: Synesthesia keeps these settings in Data/preferences.json in
+its settings folder: OSC_INPUT, OSC_INPUT_PORT, OSC_OUTPUT, OSC_OUTPUT_ADDRESS,
+OSC_OUTPUT_PORT, OSC_OUTPUT_AUDIO, OSC_OUTPUT_CONTROLS,
+OSC_OUTPUT_CONTROLS_FORMAT. Expect OSC_INPUT and OSC_OUTPUT on,
+OSC_INPUT_PORT 7000, OSC_OUTPUT_ADDRESS 127.0.0.1, OSC_OUTPUT_PORT 9001.
+
+Synesthesia's OSC API is "subject to change". Director 2.1.0 is tested with
+Synesthesia 1.25.4.189; after a Synesthesia update, check that Next moves the
+playlist and that the link chip turns green.
+
+Which OSC actions fire on which musical events is set in the event map:
+  %APPDATA%\obs-studio\plugin_config\scene-director\event-map.json
+The dock's Open folder and Reload buttons open and re-read it. The defaults
+send only /playlist/next and /playlist/previous. The full reference is the
+"Event map" section of the README (https://github.com/EnZhm/director).
 
 
-7. MIDI Director: map a controller
-----------------------------------
-  1. Docks > MIDI Director. Pick the controller as the MIDI input (Rescan if it
-     was plugged in after OBS started).
-  2. Select the OBS hotkey to drive in the list, for example md_drop_now,
-     md_force_breakdown, md_tap_tempo, PaletteDirector.Next.<filter>, cd_skip,
-     scene_director_next.
-  3. Click Learn and move the pad, key or knob. Choose Press / release or Toggle.
-  Mappings are saved with the scene collection.
+6. Manual control: keyboard, Stream Deck, controller
+----------------------------------------------------
+  Drop now        OBS Settings > Hotkeys > "Music Director: Drop now"
+                  (md_drop_now): bind a key, or use Stream Deck's OBS hotkey
+                  action on a button.
+  Other hotkeys   Force breakdown, Tap tempo, Lock BPM, Nudge, the palette and
+                  clip hotkeys, and "Scene Director: Next scene" / "Previous
+                  scene": bind them the same way.
+  Controller      Map it in Synesthesia's own MIDI panel:
+                    1. Devices tab: click "refresh connected devices" and wait
+                       until the controller shows as connected.
+                    2. Scenes tab: map the playlist controls "next" and
+                       "previous" (and "play" if you want it) to pads.
+                    3. Press a pad: the playlist moves, and Scene Director logs
+                       "external scene change: <scene>" without sending.
 
 
-8. Remove
+7. Upgrading from 2.0
+---------------------
+  - Scene Director drives Synesthesia over OSC. MIDI out and the virtual MIDI
+    port (loopMIDI or a Windows MIDI Services loopback) are no longer used.
+    Do section 5.
+  - Scene Director keeps Scene lead and sync offset. The breakdown and drop
+    switches and the cooldown move into event-map.json on the first run. The
+    2.0 MIDI settings stay in the scene collection, unused, and the log says
+    once per source:
+      [scene-director] '<source>': MIDI out was removed in 2.1; Synesthesia is
+      driven over OSC (<host>:<port>)
+  - MIDI Director is removed from Music Director. Its mappings stay in the
+    scene collection, inactive, and survive saves. On load the log says once
+    per collection:
+      [music-director] MIDI Director was removed in 2.1: <N> mappings kept in
+      the scene collection (inactive), copy at <path>
+    with a JSON copy in
+      %APPDATA%\obs-studio\plugin_config\music-director\midi-director-<collection>.json
+    and one line per mapping saying where it goes now, for example:
+      [music-director] MIDI Director mapping 'Note 36 ch 1' -> md_drop_now
+      (Drop now) is inactive: bind Drop now in Settings > Hotkeys or on a
+      Stream Deck
+  - Rebind each control as its log line says:
+      scene_director_next / _prev   -> Synesthesia's MIDI panel (section 6)
+      md_drop_now                   -> a key or a Stream Deck button (section 6)
+      other Director hotkeys        -> a key or a Stream Deck button
+  - Palettes, sets, clips and the clock carry over unchanged. Every palette
+    starts in the automatic pool (right-click a pad in the Palette Director
+    dock to take it out).
+
+
+8. Roll back to 2.0.0
+---------------------
+  Close OBS and copy the four folders from director-2.0.0-windows-x64.zip over
+  the 2.1 ones. The 2.0 settings, MIDI Director mappings included, are still in
+  the scene collection, so 2.0.0 picks them up again.
+
+
+9. Remove
 ---------
   Close OBS and delete the four folders from C:\ProgramData\obs-studio\plugins\.
   Scene collections keep their settings; the plugins pick them up again if they

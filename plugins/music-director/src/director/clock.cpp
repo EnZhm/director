@@ -120,6 +120,15 @@ struct MusicClock::Impl {
 		return (beat + phrase_offset_) / static_cast<uint64_t>(phrase_beats_);
 	}
 
+	// The beat the phrase containing `beat` started on (include/director-clock.h: bar lines are
+	// phrase_beat + 4k). The grid re-anchors with phrase_offset_, so the start is phrase_beats_
+	// before the offset. At the re-anchor beat itself this is that beat.
+	uint64_t phrase_beat_of(uint64_t beat) const
+	{
+		const uint64_t start = phrase_of(beat) * static_cast<uint64_t>(phrase_beats_);
+		return start > phrase_offset_ ? start - phrase_offset_ : 0;
+	}
+
 	void append(const ClockEvent &ev) { append_events({ev}); }
 
 	void append_events(const std::vector<ClockEvent> &evs)
@@ -283,6 +292,7 @@ struct MusicClock::Impl {
 		st.section = cur_section_;
 		st.beat = beat;
 		st.phrase = phrase_of(beat);
+		st.phrase_beat = phrase_beat_of(beat);
 		st.beat_frac = beats - std::floor(beats);
 		st.phrase_beats = phrase_beats_;
 		st.section_seq = section_seq_;

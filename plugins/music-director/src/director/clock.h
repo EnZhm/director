@@ -44,7 +44,8 @@ struct ClockState {
 	Section section = Section::Groove;
 	uint64_t beat = 0;
 	uint64_t phrase = 0;
-	double beat_frac = 0.0f; // fractional part of the beat clock (beat lights)
+	uint64_t phrase_beat = 0; // the beat the current phrase started on (bar lines are phrase_beat + 4k)
+	double beat_frac = 0.0f;  // fractional part of the beat clock (beat lights)
 	int phrase_beats = 32;
 	uint64_t section_seq = 0;    // +1 on EVERY section change, natural or forced
 	uint64_t section_beat = 0;   // the beat the current section started on

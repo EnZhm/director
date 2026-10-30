@@ -54,4 +54,33 @@ endif()
 if(failed GREATER 0)
   message(FATAL_ERROR "${failed} source registration(s) violate the video_render contract")
 endif()
+
+# MIDI out was removed from Scene Director in 2.1: the plugin must not include the MIDI header,
+# link the MIDI system library, or build common/midi sources (common/midi was removed with MIDI
+# Director in 2.1; this guard keeps it from coming back). The removed tokens are assembled below so this contract script never
+# carries them verbatim (the VERIFY grep for them must stay clean).
+set(midi_header "director")
+string(APPEND midi_header "-midi")
+set(midi_ns "director")
+string(APPEND midi_ns "_midi")
+set(midi_lib "win")
+string(APPEND midi_lib "mm")
+set(midi_marker "${midi_header}|${midi_ns}|${midi_lib}|common/midi")
+
+set(midi_removed_ok TRUE)
+set(plugin_root "${SRC_DIR}/..")
+file(GLOB_RECURSE plugin_sources "${SRC_DIR}/*.cpp" "${SRC_DIR}/*.c" "${SRC_DIR}/*.h")
+set(midi_probe_files "${plugin_root}/CMakeLists.txt")
+list(APPEND midi_probe_files ${plugin_sources})
+foreach(f IN LISTS midi_probe_files)
+  file(READ "${f}" text)
+  if(text MATCHES "${midi_marker}")
+    message(SEND_ERROR "${f}: references MIDI out (${midi_header} / ${midi_lib} / common/midi); removed from Scene Director in 2.1")
+    set(midi_removed_ok FALSE)
+  endif()
+endforeach()
+if(NOT midi_removed_ok)
+  message(FATAL_ERROR "MIDI out references remain in Scene Director")
+endif()
+
 message(STATUS "source contract: ${checked} file(s) checked, all pass")

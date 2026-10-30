@@ -23,19 +23,44 @@ Director") and keep rendering the live state.
   error and registers nothing.
 - Adds the follower signals on top of the old Palette Director clock: `section_seq` (+1 on every
   section change), `section_beat` (the beat a section starts on) and `epoch` (+1 whenever the beat
-  grid is re-anchored). Plus `bass` (0..1) for breathing effects.
+  grid is re-anchored). Plus `bass` (0..1) for breathing effects, and `phrase_beat` (2.1: the beat
+  the current phrase started on; bar lines are `phrase_beat + 4k`).
 
 ## Docks
 
 | Dock id | Content |
 |---|---|
 | `music-director-dock` | BPM / confidence, phrase.bar.beat, beat lights, section, level/bass meter, 64-beat timeline, the audio source picker, input gain, kick sensitivity, fallback BPM, phrase length, and the clock buttons (Tap tempo, Phrase is now, Drop now, Force breakdown, Lock BPM, Nudge). |
-| `midi-director-dock` | MIDI in (Windows): learn a MIDI note or CC and map it to **any** OBS hotkey — Music (`md_*`), Palette, Clips or Synesthesia. Mappings are stored with the scene collection under `midi_director`, so existing mappings load unchanged. |
 
 ## Hotkeys
 
 `md_phrase_now`, `md_drop_now`, `md_force_breakdown`, `md_tap_tempo`, `md_lock_bpm`,
-`md_nudge_back`, `md_nudge_fwd` (bind them in Settings > Hotkeys).
+`md_nudge_back`, `md_nudge_fwd`. Bind them in Settings > Hotkeys to a key, or to a Stream Deck
+button with Stream Deck's OBS hotkey action. `md_drop_now` ("Drop now") is the one a controller
+usually drove in 2.0.
+
+## Upgrading from 2.0: rebinding a controller
+
+Music Director has no MIDI in. MIDI Director (the 2.0 MIDI-in dock) was removed in 2.1; the archive
+is tag `2.0.0` ([docs/archive/midi-director.md](../../docs/archive/midi-director.md)).
+
+A scene collection's saved `midi_director` mappings are kept verbatim and inactive, and written back
+on every save. On load Music Director logs, once per collection:
+
+```
+[music-director] MIDI Director was removed in 2.1: <N> mappings kept in the scene collection (inactive), copy at <path>
+[music-director] MIDI Director mapping 'Note 36 ch 1' -> md_drop_now (Drop now) is inactive: bind Drop now in Settings > Hotkeys or on a Stream Deck
+```
+
+The first line counts the mappings and names the JSON copy
+(`%APPDATA%\obs-studio\plugin_config\music-director\midi-director-<collection>.json`). Each further
+line is one mapping: the control, the hotkey it drove, and where to bind it now.
+
+| 2.0 mapping target | Rebind in 2.1 |
+|---|---|
+| `scene_director_next` / `scene_director_prev` | In Synesthesia's MIDI panel: (1) devices tab, click "refresh connected devices" until the controller shows as connected; (2) scenes tab, map the playlist **next** and **previous** (and **play**) to pads. Scene Director logs those changes as `external scene change: <scene>` and sends nothing |
+| `md_drop_now` | OBS Settings > Hotkeys > "Music Director: Drop now": press a key. Or a Stream Deck button with Stream Deck's OBS hotkey action set to that hotkey |
+| `md_force_breakdown`, `md_tap_tempo`, `md_lock_bpm`, `md_nudge_*`, `md_phrase_now`, palette and clip hotkeys | The same way: a key or a Stream Deck button |
 
 ## Settings and migration
 

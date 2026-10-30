@@ -1,9 +1,11 @@
 # Cross-plugin tests for the Director suite:
-#   xplugin_tests  director-follow edge cases, the shared MIDI code, Palette Director exactly-once,
+#   xplugin_tests  director-follow edge cases, Palette Director exactly-once,
 #                  and the Music Director + Palette Director equivalence with PD 1.2.0 (golden)
 #   xplugin_cd     Clip Director exactly-once (own executable: Clip and Scene Director both use
 #   xplugin_sd     Scene Director exactly-once   namespace cd for their cores)
-# All three are driven by the same scripted clock (clock_script.h).
+#   xplugin_osc    the shared common/osc codec and UDP transport (director_osc)
+#   xplugin_osc_bundle  OSC bundle decoding + real Synesthesia feedback fixtures (ASan/UBSan)
+# All are driven by the same scripted clock (clock_script.h).
 #   cmake -S tests/xplugin -B build-xplugin && cmake --build build-xplugin && ctest --test-dir build-xplugin
 cmake_minimum_required(VERSION 3.16)
 project(director_xplugin_tests C CXX)
@@ -27,14 +29,23 @@ else()
   set(XP_WARN -Wall -Wextra -Werror)
 endif()
 
+# The shared OSC library (codec + UDP transport), namespace director_osc. No plugin links it yet.
 add_library(
-  director_midi_core
+  director_osc
   STATIC
-  ${DIRECTOR_ROOT}/common/midi/midi_map.cpp
-  ${DIRECTOR_ROOT}/common/midi/midi_msg.cpp
+  ${DIRECTOR_ROOT}/common/osc/osc.cpp
+  ${DIRECTOR_ROOT}/common/osc/osc-transport.cpp
 )
-target_include_directories(director_midi_core PUBLIC ${DIRECTOR_ROOT}/common/midi)
-target_link_libraries(director_midi_core PUBLIC Threads::Threads)
+target_include_directories(director_osc PUBLIC ${DIRECTOR_ROOT}/common/osc)
+target_link_libraries(director_osc PUBLIC Threads::Threads)
+if(MSVC)
+  target_compile_options(director_osc PRIVATE /W4 /WX)
+else()
+  target_compile_options(director_osc PRIVATE -Wall -Wextra -Werror)
+endif()
+if(WIN32)
+  target_link_libraries(director_osc PUBLIC ws2_32)
+endif()
 
 # Music Director clock core (each library sees only its own plugin's headers)
 add_library(
@@ -67,14 +78,12 @@ add_executable(
   xplugin_tests
   main.cpp
   test_follow.cpp
-  test_midi_map.cpp
-  test_midi_msg.cpp
   test_xonce_pd.cpp
   test_equivalence.cpp
 )
 target_include_directories(xplugin_tests PRIVATE ${DIRECTOR_ROOT}/common ${PLUGINS} ${DOCTEST})
 target_compile_definitions(xplugin_tests PRIVATE XPLUGIN_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden")
-target_link_libraries(xplugin_tests PRIVATE director_midi_core xp_md_core xp_pd_core)
+target_link_libraries(xplugin_tests PRIVATE xp_md_core xp_pd_core)
 target_compile_options(xplugin_tests PRIVATE ${XP_WARN})
 add_test(NAME xplugin COMMAND xplugin_tests)
 
@@ -87,3 +96,52 @@ add_executable(xplugin_sd test_xonce_sd.cpp ${PLUGINS}/scene-director/src/core/s
 target_include_directories(xplugin_sd PRIVATE ${PLUGINS} ${PLUGINS}/scene-director/src/core ${DOCTEST})
 target_compile_options(xplugin_sd PRIVATE ${XP_WARN})
 add_test(NAME xplugin_sd COMMAND xplugin_sd)
+
+add_executable(
+  xplugin_sd_map
+  test_xonce_sd_map.cpp
+  ${PLUGINS}/scene-director/src/core/event_map.cpp
+  ${PLUGINS}/scene-director/src/core/event_engine.cpp
+  ${PLUGINS}/scene-director/src/core/switch_sched.cpp
+)
+target_include_directories(xplugin_sd_map PRIVATE ${PLUGINS} ${PLUGINS}/scene-director/src/core ${DIRECTOR_ROOT}/common ${DOCTEST})
+target_compile_options(xplugin_sd_map PRIVATE ${XP_WARN})
+add_test(NAME xplugin_sd_map COMMAND xplugin_sd_map)
+
+# Spec 8 (b)-(d) across the suite: PD + SD on one scripted clock (CD: xplugin_cd, same script).
+add_executable(
+  xplugin_suite
+  main.cpp
+  test_xonce_suite.cpp
+  ${PLUGINS}/scene-director/src/core/event_map.cpp
+  ${PLUGINS}/scene-director/src/core/event_engine.cpp
+)
+target_include_directories(xplugin_suite PRIVATE ${PLUGINS} ${PLUGINS}/scene-director/src/core ${DIRECTOR_ROOT}/common ${DOCTEST})
+target_link_libraries(xplugin_suite PRIVATE xp_pd_core)
+target_compile_options(xplugin_suite PRIVATE ${XP_WARN})
+add_test(NAME xplugin_suite COMMAND xplugin_suite)
+
+add_executable(xplugin_osc main.cpp test_osc.cpp test_osc_transport.cpp)
+target_include_directories(xplugin_osc PRIVATE ${DOCTEST} ${DIRECTOR_ROOT}/common/osc)
+target_link_libraries(xplugin_osc PRIVATE director_osc)
+target_compile_options(xplugin_osc PRIVATE ${XP_WARN})
+add_test(NAME xplugin_osc COMMAND xplugin_osc)
+
+# The bundle decoder gets its own executable so it can run under ASan/UBSan where available.
+add_executable(xplugin_osc_bundle main.cpp test_osc_bundle.cpp ${DIRECTOR_ROOT}/common/osc/osc.cpp)
+target_include_directories(xplugin_osc_bundle PRIVATE ${DOCTEST} ${DIRECTOR_ROOT}/common/osc)
+target_compile_definitions(xplugin_osc_bundle PRIVATE XPLUGIN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+target_compile_options(xplugin_osc_bundle PRIVATE ${XP_WARN})
+if(NOT MSVC)
+  include(CheckCXXSourceCompiles)
+  set(CMAKE_REQUIRED_FLAGS "-fsanitize=address,undefined")
+  set(CMAKE_REQUIRED_LINK_OPTIONS "-fsanitize=address,undefined")
+  check_cxx_source_compiles("int main() { return 0; }" XP_HAVE_ASAN_UBSAN)
+  unset(CMAKE_REQUIRED_FLAGS)
+  unset(CMAKE_REQUIRED_LINK_OPTIONS)
+  if(XP_HAVE_ASAN_UBSAN)
+    target_compile_options(xplugin_osc_bundle PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(xplugin_osc_bundle PRIVATE -fsanitize=address,undefined)
+  endif()
+endif()
+add_test(NAME xplugin_osc_bundle COMMAND xplugin_osc_bundle)

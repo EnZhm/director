@@ -67,7 +67,40 @@ def scan(plugin: pathlib.Path):
         found["hotkey"] = {h for h in found["hotkey"] if not h.startswith("pd_")}
     name = json.loads((plugin / "buildspec.json").read_text())["name"]
     found["log prefix"] = {name}
+    # Config files (obs_module_config_path) and literal "[tag]" log prefixes, e.g. Scene Director's
+    # event-map.json and "[scene-director]". Each must belong to one plugin only.
+    found["config file"] = set()
+    found["log tag"] = set()
+    for f in (plugin / "src").rglob("*"):
+        if f.suffix not in (".c", ".cpp", ".h", ".hpp"):
+            continue
+        text = f.read_text(errors="replace")
+        for m in re.finditer(r'obs_module_config_path\(\s*"([^"]+)"', text):
+            found["config file"].add(m.group(1))
+        for m in re.finditer(r'"\[([a-z][a-z0-9-]*)\]', text):
+            if m.group(1) != "name":
+                found["log tag"].add(m.group(1))
     return name, found
+
+
+def clock_fields():
+    """The director_clock calldata fields a follower reads (include/director-clock.h) and the ones
+    Music Director writes. Fails on a field read twice under one name, or read but never written
+    (e.g. a typo'd phrase_beat vs phrase_beats)."""
+    fail = []
+    header = (ROOT / "include" / "director-clock.h").read_text(errors="replace")
+    read = re.findall(r'calldata_(?:get_\w+|int|float|bool|string)\(\s*&?\w+\s*,\s*"([a-z_][a-z0-9_]*)"', header)
+    dups = sorted({f for f in read if read.count(f) > 1})
+    for f in dups:
+        fail.append(f"clock field '{f}' read more than once in include/director-clock.h")
+    written = set()
+    md = ROOT / "plugins" / "music-director" / "src"
+    for f in md.rglob("*"):
+        if f.suffix in (".c", ".cpp", ".h"):
+            written.update(re.findall(r'calldata_set_\w+\(\s*\w+\s*,\s*"([a-z_][a-z0-9_]*)"', f.read_text(errors="replace")))
+    for f in sorted(set(read) - written):
+        fail.append(f"clock field '{f}' is read by followers but never set by music-director")
+    return sorted(set(read)), fail
 
 
 def main() -> int:
@@ -80,7 +113,16 @@ def main() -> int:
         for stale in p.rglob("pd-clock-api.h"):
             fail.append(f"{p.name}: retired clock header still present: {stale.relative_to(ROOT)}")
         table[p.name] = found
-    kinds = list(PATTERNS) + ["log prefix"]
+    kinds = list(PATTERNS) + ["log prefix", "config file", "log tag"]
+    # A literal "[tag]" naming ANOTHER plugin is a collision even if only one plugin uses it.
+    names = {p.name for p in PLUGINS}
+    for plugin, found in table.items():
+        for tag in found.get("log tag", ()):
+            if tag in names and tag != plugin:
+                fail.append(f"log tag '[{tag}]' used by {plugin}")
+    fields, field_fail = clock_fields()
+    fail.extend(field_fail)
+    print(f"== director_clock fields ({len(fields)}): {', '.join(fields)}")
     for kind in kinds:
         owners = {}
         for plugin, found in table.items():
@@ -101,7 +143,7 @@ def main() -> int:
             print("  " + f)
         print("FAIL")
         return 1
-    print(f"\nPASS: {len(table)} plugins, no shared source/dock/hotkey/proc/signal/collection-key/log-prefix ids")
+    print(f"\nPASS: {len(table)} plugins, no shared source/dock/hotkey/proc/signal/collection-key/log-prefix/config-file/log-tag ids; clock fields consistent")
     return 0
 
 

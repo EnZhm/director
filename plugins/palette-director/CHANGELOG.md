@@ -6,6 +6,35 @@ Palette Director for OBS Studio 32.2.x, Windows x64. Part of the
 This repository's first release is 1.2.0. The 1.0.0, 1.0.1 and 1.1.0 builds were made
 before it and are listed here for completeness; their files are not republished.
 
+## 2.1.0
+
+Part of Director 2.1.0.
+
+### Added: the palette pool
+
+- Each palette of a Palette Lock's set is either in the **automatic pool** or out of it. Out-of-pool
+  palettes are never chosen automatically; they stay in the set and a pad press still plays them.
+- Dock: right-click a palette pad > **In automatic pool** toggles it; the palette editor shows the
+  same checkbox. An out-of-pool pad is dimmed (about 35% opacity) with a small "off" corner mark;
+  the live highlight still shows on it when it is live.
+- Automatic selection draws only from in-pool palettes: phrase rotation, the drop pick,
+  drop-after-breakdown, the drop colour cycle's target, and Next / Prev palette (hotkeys and dock
+  buttons skip out-of-pool palettes).
+- A breakdown palette that is out of the pool holds the current palette and logs
+  `'<filter>': breakdown palette '<name>' is out of the pool; holding '<live>'`.
+- A pad press on an out-of-pool palette makes it live at once and logs
+  `'<filter>': manual '<name>' (out of the automatic pool)`.
+- A toggle changes the pool for the next automatic change only: it never changes the live
+  palette, interrupts a crossfade or a drop cycle, or resets the seeded random stream.
+- One palette left in the pool: rotation holds on it. None left: automatic changes keep the live
+  palette and log `'<filter>': automatic pool is empty; holding '<live>'` once, then
+  `automatic pool has a palette again` when a palette returns to the pool.
+- Saved on the palette, in the filter settings and the set file (pools are per set): key `pool`,
+  written only when `false`. Set files stay schema 2; a 2.0 set or filter loads with every palette
+  in the pool and round-trips byte-identical.
+- With every palette in the pool, the scheduler's decisions are identical to 2.0 (the Palette
+  Director 1.2.0 equivalence golden is unchanged).
+
 ## 2.0.0
 
 Part of Director 2.0.0 (Music Director + Palette Director + Clip Director + Scene Director, one version).
