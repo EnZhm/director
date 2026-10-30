@@ -52,7 +52,6 @@ log line, palettes hold and the filter keeps rendering the live palette.
 
 #include "director-clock.h"
 #include "director/palette-director.h"
-#include "director/palette-snapshot.h"
 
 namespace {
 
@@ -243,9 +242,6 @@ struct pd_host {
 	bool v_md_found = false;
 	float v_clk_bpm = 0.0f;
 	int v_clk_section = 0;
-	/* palette feed (spec 3.2): the proc reads these under view_mx, never the render path */
-	uint64_t v_palette_seq = 0;
-	bool v_cycling = false;
 	std::deque<pdhost::LogLine> v_log;
 	uint64_t v_log_seq = 0;
 	std::deque<pdhost::TimelineSample> v_tl;
@@ -454,8 +450,6 @@ static void worker_main(pd_host *h)
 			h->v_md_found = ok;
 			h->v_clk_bpm = static_cast<float>(bpm);
 			h->v_clk_section = static_cast<int>(st.section);
-			h->v_palette_seq = st.palette_seq;
-			h->v_cycling = st.cycling;
 			if (tl_last_beat < 0 || beats_now < tl_last_beat || beats_now - tl_last_beat >= 0.125) {
 				tl_last_beat = beats_now;
 				pdhost::TimelineSample s;
@@ -677,134 +671,6 @@ static void proc_drop_cycle(void *, calldata_t *cd)
 	calldata_set_int(cd, "steps_per_beat", steps);
 }
 
-/* ------------------------------------------------------------------------- */
-/* palette feed (spec 3.2): the live palette of one Palette Lock filter       */
-
-namespace {
-
-struct PaletteLockInfo {
-	obs_source_t *filter = nullptr; // valid while the enumeration's refs are held
-	std::string source;
-	std::string filter_name;
-	bool enabled = false;
-};
-
-struct PaletteEnum {
-	std::vector<PaletteLockInfo> all; // obs_enum_sources order, then each source's filter order
-	std::vector<obs_source_t *> refs;
-};
-
-void enum_palette_filter(obs_source_t *parent, obs_source_t *filter, void *param)
-{
-	auto *en = static_cast<PaletteEnum *>(param);
-	if (!filter || !obs_source_get_id(filter) || strcmp(obs_source_get_id(filter), "palette_lock_filter") != 0)
-		return;
-	PaletteLockInfo info;
-	info.filter = filter;
-	const char *pn = parent ? obs_source_get_name(parent) : nullptr;
-	const char *fn = obs_source_get_name(filter);
-	info.source = pn ? pn : "";
-	info.filter_name = fn ? fn : "";
-	info.enabled = obs_source_enabled(filter);
-	en->all.push_back(info);
-	en->refs.push_back(obs_source_get_ref(filter));
-}
-
-bool enum_palette_source(void *param, obs_source_t *source)
-{
-	obs_source_enum_filters(source, enum_palette_filter, param);
-	return true;
-}
-
-/* "<source>/<filter>", or empty for the first ENABLED Palette Lock in obs_enum_sources order then
- * filter order (spec 3.2, the rule the Music Director migration uses). Palette Lock filters sit on
- * inputs AND on scenes, and obs_enum_sources() lists inputs only, so scenes are enumerated second:
- * they only decide when no input holds a Palette Lock. */
-PaletteLockInfo pick_palette_lock(const PaletteEnum &en, const std::string &want)
-{
-	if (!want.empty()) {
-		const std::size_t slash = want.find('/');
-		const bool on_source = slash != std::string::npos;
-		const std::string src = on_source ? want.substr(0, slash) : std::string();
-		const std::string flt = on_source ? want.substr(slash + 1) : want;
-		for (const auto &info : en.all)
-			if (info.filter_name == flt && (!on_source || info.source == src))
-				return info;
-		return PaletteLockInfo{};
-	}
-	for (const auto &info : en.all)
-		if (info.enabled)
-			return info;
-	return PaletteLockInfo{};
-}
-
-} // namespace
-
-/* Read-only palette feed. The snapshot is taken under the filter's existing locks (the registry
- * lock keeps the host alive, the host's view lock is the one the worker publishes the dock view
- * with); the render triple buffer and the render path are never touched. */
-static void proc_palette(void *, calldata_t *cd)
-{
-	const char *want = calldata_string(cd, "filter");
-	PaletteEnum en;
-	obs_enum_sources(enum_palette_source, &en);
-	obs_enum_scenes(enum_palette_source, &en);
-	const PaletteLockInfo info = pick_palette_lock(en, want ? std::string(want) : std::string());
-
-	bool ok = false;
-	long long seq = 0;
-	int live = -1;
-	int mode = 0;
-	int n_colours = 0;
-	bool cycling = false;
-	std::string name;
-	std::string colours;
-	const std::string filter_name = info.filter ? info.source + "/" + info.filter_name : std::string();
-
-	if (info.filter) {
-		std::lock_guard<std::mutex> reg(g_reg_mx);
-		for (const auto &kv : g_reg) {
-			pd_host *h = kv.second;
-			if (h->filter != info.filter)
-				continue;
-			struct pl_set set = {};
-			{
-				std::lock_guard<std::mutex> view(h->view_mx);
-				set = h->v_set;
-				live = h->v_st.live_palette;
-				seq = static_cast<long long>(h->v_palette_seq);
-				cycling = h->v_cycling;
-			}
-			/* sanitise + format a private copy: pure, no libobs, no render state */
-			int l = live;
-			int prev = -1;
-			pl_sanitize_for_render(&set, &l, &prev);
-			name = set.palettes[l].name;
-			mode = set.palettes[l].mode;
-			n_colours = set.palettes[l].n_colours;
-			colours = pd::palette_colours(set.palettes[l]);
-			live = l;
-			ok = true;
-			break;
-		}
-	}
-
-	calldata_set_bool(cd, "ok", ok);
-	calldata_set_int(cd, "api_version", pd::kPaletteFeedApiVersion);
-	calldata_set_int(cd, "seq", seq);
-	calldata_set_int(cd, "live", live);
-	calldata_set_string(cd, "name", name.c_str());
-	calldata_set_int(cd, "mode", mode);
-	calldata_set_int(cd, "n_colours", n_colours);
-	calldata_set_string(cd, "colours", colours.c_str());
-	calldata_set_bool(cd, "cycling", cycling);
-	calldata_set_string(cd, "filter_name", filter_name.c_str());
-
-	for (obs_source_t *f : en.refs)
-		if (f)
-			obs_source_release(f);
-}
-
 extern "C" void pd_drop_cycle_api_register(void)
 {
 	proc_handler_t *ph = obs_get_proc_handler();
@@ -814,13 +680,5 @@ extern "C" void pd_drop_cycle_api_register(void)
 	}
 	proc_handler_add(ph, "void palette_director_drop_cycle(out bool active, out int steps_per_beat)",
 			 proc_drop_cycle, nullptr);
-	/* The palette feed registers here too: this is the module-load hook (pd_drop_cycle_api_register
-	 * is what obs_module_load calls), and registering without a log line keeps PD's log output as
-	 * it was. */
-	proc_handler_add(ph,
-			 "void palette_director_palette(in string filter, out bool ok, out int api_version, "
-			 "out int seq, out int live, out string name, out int mode, out int n_colours, "
-			 "out string colours, out bool cycling, out string filter_name)",
-			 proc_palette, nullptr);
 	blog(LOG_INFO, "[palette-director] drop cycle signal registered (palette_director_drop_cycle)");
 }

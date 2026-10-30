@@ -31,7 +31,6 @@ add_library(
   STATIC
   ${PD_DIRECTOR_ROOT}/palette-director.cpp
   ${PD_DIRECTOR_ROOT}/scheduler.cpp
-  ${PD_DIRECTOR_ROOT}/palette-snapshot.cpp
 )
 target_include_directories(
   pd_palette_director
@@ -55,7 +54,6 @@ add_executable(
   test_host_api.cpp
   test_set_file.cpp
   test_drop_cycle.cpp
-  test_palette_feed.cpp
   test_follower.cpp
 )
 target_link_libraries(pd_director_tests PRIVATE pd_palette_director pd_palette)

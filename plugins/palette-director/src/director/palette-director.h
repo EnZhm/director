@@ -110,12 +110,7 @@ struct DirectorState {
 	uint64_t phrase = 0;
 	int live_palette = 0;  // index into SetFile::palettes
 	int prev_palette = -1; // outgoing palette, -1 if none
-	// Palette feed (spec 3.2): +1 on every live palette change of this filter (section, phrase
-	// rotation, manual, force-live restore, each drop-cycle step). cycling: that last change came
-	// from a drop colour cycle step.
-	uint64_t palette_seq = 0;
-	bool cycling = false;
-	float pfade = 1.0f; // 0..1 crossfade progress
+	float pfade = 1.0f;    // 0..1 crossfade progress
 	int cooldown_phrases_left = 0;
 	bool lock_on = true;
 	// Derived from the same state (filter + dock).
