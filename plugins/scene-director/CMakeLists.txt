@@ -61,5 +61,9 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE src src/core src/obs ..
 # the OSC transport's sender / receiver run on their own threads
 find_package(Threads REQUIRED)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Threads::Threads)
+# osc-transport uses Winsock (socket/sendto/WSAStartup/WSAIoctl ...)
+if(WIN32)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ws2_32)
+endif()
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
