@@ -56,8 +56,8 @@ if(failed GREATER 0)
 endif()
 
 # MIDI out was removed from Scene Director in 2.1: the plugin must not include the MIDI header,
-# link the MIDI system library, or build common/midi sources. common/midi itself stays for Music
-# Director until MD-RM. The removed tokens are assembled below so this contract script never
+# link the MIDI system library, or build common/midi sources (common/midi was removed with MIDI
+# Director in 2.1; this guard keeps it from coming back). The removed tokens are assembled below so this contract script never
 # carries them verbatim (the VERIFY grep for them must stay clean).
 set(midi_header "director")
 string(APPEND midi_header "-midi")
