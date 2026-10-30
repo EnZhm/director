@@ -464,3 +464,31 @@ TEST_CASE("scene_loaded plans carry no guard key and fire once per feedback data
 	s = eng.tick(at(40.0, Section::Groove), {}, {scene("beamers")}, 0);
 	CHECK(s.size() == 1);
 }
+
+TEST_CASE("bar keys are absolute within an epoch: the same bar-in-phrase in two phrases does not collide")
+{
+	// phrase_beats = 16, phrase_beat = 2 then 18: the first bar of each phrase (beats 2 and 18) is
+	// bar-in-phrase 0 both times. The exactly-once key must still differ, or a process-wide guard
+	// would swallow every bar after the first phrase.
+	const EventMap map =
+		map_from("{\"mappings\": [{\"id\":\"b\",\"event\":\"bar\",\"enabled\":true,\"quantize\":\"now\","
+			 "\"actions\":[{\"route\":\"/bar\",\"args\":[\"{bar}\"]}]}]}");
+	EventEngine eng(map);
+	eng.tick(at(1.0, Section::Groove, 128.0, 16), {}, {}, 0);
+
+	ClockSample c1 = at(2.0, Section::Groove, 128.0, 16);
+	c1.phrase_beat = 2;
+	const std::vector<PlannedSend> s1 = eng.tick(c1, beat_edge(2), {}, 0);
+	REQUIRE(s1.size() == 1);
+
+	ClockSample c2 = at(18.0, Section::Groove, 128.0, 16);
+	c2.phrase_beat = 18;
+	c2.phrase = 1;
+	const std::vector<PlannedSend> s2 = eng.tick(c2, beat_edge(18), {}, 0);
+	REQUIRE(s2.size() == 1);
+
+	CHECK(s1[0].key != s2[0].key);
+	CHECK(s1[0].key == "e0:b0");
+	CHECK(s2[0].key == "e0:b4");                   // 16 beats later = 4 bars later
+	CHECK(s2[0].args[0].i - s1[0].args[0].i == 4); // {bar} counts on, not restarting per phrase
+}
