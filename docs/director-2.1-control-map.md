@@ -28,12 +28,13 @@ Facts that shape 2.1:
 - The CD OSC code and its tests (`test_osc.cpp`, `test_osc_transport.cpp`) exist only in history (`68cf066^`); a checkout of `mono/import` still shows them in the working tree. They are the starting point for `common/osc`: codec (int32/float32/string, 4-byte padding), UDP transport with a sender thread and a receiver thread, bounded queue (256), `SIO_UDP_CONNRESET` handling on Windows, `stop()` joins within ~100 ms.
 - The clock proc is `director_clock` (Music Director). `palette_director_clock` no longer exists (removed from PD in 2.0).
 - SD decides and sends on `video_tick` (graphics thread) under its source mutex; WinMM `midiOutShortMsg` is the only blocking call. The dock timer drives the same scheduler when the source is outside the active scene.
-- PD exports one proc, `palette_director_drop_cycle(out bool active, out int steps_per_beat)`. Nothing exports the live palette colours.
+- PD exports one proc, `palette_director_drop_cycle(out bool active, out int steps_per_beat)`, used by CD's stutter.
 - The clock does not carry the phrase anchor (`phrase = (beat + phrase_offset) / phrase_beats` inside MD), so a follower cannot place bar lines on the phrase grid from one sample.
 - The show collection's SD source settings still carry CD 1.1.0's OSC keys (`syn_enabled`, `syn_host`, `syn_send_port`, `syn_feedback_port`, `syn_lead_ms`, `syn_pools`, ...). SD's `Settings` store keeps every unknown key verbatim.
 - CD 1.1.0 defaulted to send 7000 / feedback 7001; the show-rig setup notes used Synesthesia input 6000 / output 7000. The real values are whatever the show collection holds.
 - 2.0 scope decisions (2026-10-29): no scene pools in OBS (the playlist lives in Synesthesia); Synesthesia moves on breakdowns, drops and manual Next/Prev only.
-- Synesthesia OSC: Pro only, "still in development and subject to change". Meta colour controls take `r g b` (`/controls/meta/high_color 0 1 1` in the manual); the manual's own naming rule (lowercase, no underscores) conflicts with that example, so the real meta names are read from the rig, never assumed.
+- Palette Lock's gradient map and duotone modes map the input's brightness (Rec. 709 luma by default, or max / average of r g b) onto the palette, so the Synesthesia feed's own hues do not reach the picture.
+- Synesthesia OSC: Pro only, "still in development and subject to change".
 - Synesthesia OSC output on a scene launch: `/scenes/{sceneName}`, the scene's control values, global control names, dropdown labels. Audio variables stream continuously when enabled. Preset names are not echoed.
 
 ## 3. OBS hotkeys in the suite and their relation to Synesthesia
@@ -53,20 +54,22 @@ Facts that shape 2.1:
 |---|---|---|
 | 1 | Section edges -> Synesthesia | SD over OSC: event map default = `/playlist/next` on breakdown and drop, landing on `section_beat` minus Scene lead; cooldown and forced bypass as 2.0 |
 | 2 | Manual Next / Prev | Same hotkeys and dock buttons -> `/playlist/next` / `/playlist/previous` through the event map |
-| 3 | Controller | MIDI Director removed. Manual override per open question A (spec section 9) |
-| 4 | Palette -> Synesthesia colours | New: PD exports a read-only palette feed; SD maps palette changes to `/controls/meta/*` colours and re-asserts them when Synesthesia confirms a scene load. Palette Lock in OBS is unchanged |
+| 3 | Controller | MIDI Director removed. The controller is mapped in Synesthesia's own MIDI panel for Synesthesia actions (SD logs those scene changes as `external`); Drop now (`md_drop_now`) and the other Director hotkeys go on keyboard / Stream Deck |
+| 4 | Palette | Unchanged: Palette Lock recolours the Synesthesia feed in OBS on `section_beat`. No colours are pushed into Synesthesia |
 | 5 | Clips | Unchanged. CD stays the clip engine, Spout only, no OSC |
 | 6 | OSC transport | `common/osc` (promoted from CD 1.1.0 history), used by SD only |
 | 7 | MIDI out / loopMIDI | Removed from SD. `common/midi` removed with MIDI Director |
 | 8 | Verification | SD listens on Synesthesia's OSC output: confirms each scene change, measures latency, logs mismatches and external changes |
-| 9 | Tuning | `event-map.json` in SD's plugin config dir: musical event -> OSC actions, per-event enable, quantize, offset, cooldown, debounce |
+| 9 | Tuning | `event-map.json` in SD's plugin config dir: musical event -> OSC actions, per-event enable, quantize, offset, cooldown, debounce. Defaults send only `/playlist/next` and `/playlist/previous` |
 
-## 5. Recommendations
+## 5. Decisions
 
-| Item | Recommendation |
+| Item | Decision |
 |---|---|
-| SD MIDI out | Remove (no deprecated fallback). The rollback is the 2.0.0 release zip, staged on the show rig before the 2.1 gate as in 2.0 |
+| SD MIDI out | Removed, no deprecated fallback. The rollback is the 2.0.0 release zip, staged on the show rig before the 2.1 gate as in 2.0 |
 | CD's Synesthesia hooks | Stay as they are: CD has none on `main`; the Spout picture path needs no control messages |
-| Drop detection in SD (Q B) | None. SD follows `director_clock` exactly as 2.0; one detector keeps the one-landing-beat guarantee |
-| Preset at scene launch (Q C) | Default stays playlist Next (presets ride in Synesthesia's playlist). When a mapping launches a scene, use the named preset inside the same `/scenes/{name} "Preset"` message; omitted means gold. No `/favslots/{n}` after a launch |
-| MIDI Director archive | No new tag: tag `2.0.0` (cc5bd6b) already pins the last state with the dock. `docs/archive/midi-director.md` on 2.1 records the paths and the tag. Optional `archive/midi-director` branch at cc5bd6b, created at release time |
+| Drop detection in SD | None. SD follows `director_clock` exactly as 2.0; one detector keeps the one-landing-beat guarantee |
+| Preset at scene launch | Default stays playlist Next (presets ride in Synesthesia's playlist). A mapping that launches a scene names the preset inside the same `/scenes/{name} "Preset"` message; omitted means gold. No `/favslots/{n}` after a launch |
+| Colours in Synesthesia | None pushed. Palette Lock in OBS recolours by brightness, so Synesthesia-side colours add nothing to the picture |
+| Controller | Synesthesia's MIDI panel for Synesthesia; `md_drop_now` stays an OBS hotkey for keyboard / Stream Deck; rebind documented in INSTALL, README and the migration log |
+| MIDI Director archive | Tag `2.0.0` (cc5bd6b) is the archive. `docs/archive/midi-director.md` records the tag, the removed paths and the rebind table. No other tag or branch |
