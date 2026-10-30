@@ -30,6 +30,10 @@ struct Sample {
 	bool ok = false; // director_clock_read() succeeded
 	int64_t beat = 0;
 	int64_t phrase = 0;
+	// The beat the current phrase started on (bar lines are phrase_beat + 4k). 0 from a Music
+	// Director that predates the field, or from a caller that does not fill it: bars are then
+	// beat % 4 == 0. Unused by the followers shipped with 2.1.
+	int64_t phrase_beat = 0;
 	int section = 0;
 	int64_t section_seq = 0;
 	int64_t section_beat = 0;
