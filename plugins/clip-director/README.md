@@ -8,7 +8,7 @@ deeply, evens out brightness, and sends the picture to Synesthesia over Spout. P
 
 | | |
 |---|---|
-| Version | 2.0.0 |
+| Version | 2.1.0 |
 | Platform | Windows 10/11 x64 |
 | OBS Studio | 32.2.x (built against 32.2.2) |
 | Needs | Music Director 2.0.0 for the beat clock |
@@ -123,16 +123,16 @@ With "Stutter with the drop colour cycle" on, Clip Director alternates the live 
 outgoing clip at Palette Director's drop colour cycle rate. The cycle is read from Palette
 Director (`palette_director_drop_cycle`); without Palette Director, stutter stays off.
 
-## Synesthesia and MIDI
+## Synesthesia and hotkeys
 
-Synesthesia scene control and MIDI are no longer part of Clip Director:
+Clip Director sends no control messages to Synesthesia:
 
-- **Synesthesia** scenes are driven by **Scene Director** (playlist Next / Prev over MIDI
-  out), on the same section beat as the clip cut.
-- **MIDI** is the **Music Director** MIDI Director dock: it maps MIDI notes and CCs to any
-  OBS hotkey, including Clip Director's Skip / Hold / Ban.
+- **Synesthesia** scenes are driven by **Scene Director** (playlist Next / Prev over OSC), on the
+  same section beat as the clip cut.
+- **Skip / Hold / Ban** are OBS hotkeys (`cd_skip`, `cd_hold`, `cd_ban`): bind them to keys in
+  OBS Settings > Hotkeys, or to Stream Deck buttons with Stream Deck's OBS hotkey action.
 
-Clip Director still sends its picture to Synesthesia over Spout; no OSC is used.
+Clip Director sends its picture to Synesthesia over Spout; no OSC is used.
 
 ## Build from source
 

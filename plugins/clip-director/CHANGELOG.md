@@ -6,6 +6,12 @@ Clip Director for OBS Studio 32.2.x, Windows x64. Part of the
 This repository's first release is 1.1.0. The 1.0.0 build was made before it and is
 listed here for completeness; its files are not republished.
 
+## 2.1.0
+
+- Part of Director 2.1.0. No change to Clip Director itself: it stays the clip engine and sends
+  its picture over Spout. Skip / Hold / Ban are bound as OBS hotkeys (keyboard or Stream Deck)
+  now that MIDI Director is removed from Music Director.
+
 ## 2.0.0
 
 - Clips only. Synesthesia OSC scene control and the MIDI Director dock are gone:
