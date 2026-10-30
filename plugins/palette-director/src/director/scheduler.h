@@ -78,6 +78,10 @@ public:
 private:
 	std::vector<int> normal_idx() const;
 	bool in_pool(int i) const;
+	// "none in the pool" (spec 7.1): tests the mask itself, so a set whose only
+	// in-pool palette is the breakdown palette is NOT empty (breakdown is still
+	// an automatic choice on the breakdown edge).
+	bool pool_is_empty() const;
 	std::string name_of(int i) const;
 	int pick_next(int dir);
 	std::vector<Event> go_live(int i, const std::string &why, uint64_t beat);

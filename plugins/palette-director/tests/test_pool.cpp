@@ -267,3 +267,43 @@ TEST_CASE("pool: breakdown palette out of the pool holds the current palette and
 		CHECK(e.palette != 3); // never switches to the out-of-pool breakdown palette
 	CHECK(count_has(d.events(), "breakdown palette 'Pal 3' is out of the pool; holding") == 1);
 }
+
+TEST_CASE("pool: breakdown palette as the only in-pool palette is not an empty pool")
+{
+	// Only the breakdown palette is in the pool; every normal palette is out. The pool is
+	// NOT empty (the breakdown edge still picks it automatically), so no empty-pool log.
+	pd::SetFile s = pooled_set(4, {0, 1, 2}, "Pal 3");
+	s.palette_changes.trigger = pd::ChangeTrigger::Drop;
+	s.palette_changes.order = pd::ChangeOrder::Sequence;
+	s.director.off_on_breakdown = false;
+	s.director.random_off = false;
+	pd::PaletteDirector d(s);
+	pdtest::run(d, pdtest::script(56, 32, {{0, 0}, {32, 1}, {48, 2}}));
+
+	CHECK_FALSE(has(d.events(), "automatic pool is empty"));
+	// the breakdown edge still switches to the in-pool breakdown palette
+	CHECK(d.snapshot().live_palette == 3);
+	bool saw_bd = false;
+	for (const auto &e : pdtest::palette_changes(d.events()))
+		if (e.palette == 3 && e.detail.find("breakdown") != std::string::npos)
+			saw_bd = true;
+	CHECK(saw_bd);
+}
+
+TEST_CASE("pool: a set whose only palette is also the breakdown palette stays 2.0-identical")
+{
+	// 2.0 rotation excludes the breakdown palette, so a single palette that is also the
+	// breakdown palette never produces a rotation event — and must not gain a spurious
+	// "automatic pool is empty" event in 2.1.
+	pd::SetFile s = pdtest::make_set(1, "Pal 0");
+	s.palette_changes.trigger = pd::ChangeTrigger::Phrases;
+	s.palette_changes.every_phrases = 1;
+	s.palette_changes.order = pd::ChangeOrder::Sequence;
+	s.director.phrase_beats = 32;
+	s.director.random_off = false;
+	pd::PaletteDirector d(s);
+	pdtest::run(d, pdtest::script(160, 32));
+
+	CHECK_FALSE(has(d.events(), "automatic pool is empty"));
+	CHECK(pdtest::palette_changes(d.events()).empty());
+}

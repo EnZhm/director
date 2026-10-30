@@ -124,6 +124,14 @@ bool Scheduler::in_pool(int i) const
 	return i < static_cast<int>(cfg_.in_pool.size()) ? cfg_.in_pool[static_cast<std::size_t>(i)] : true;
 }
 
+bool Scheduler::pool_is_empty() const
+{
+	for (int i = 0; i < cfg_.palette_count; ++i)
+		if (in_pool(i))
+			return false;
+	return true;
+}
+
 std::string Scheduler::name_of(int i) const
 {
 	return (i >= 0 && i < static_cast<int>(cfg_.names.size())) ? cfg_.names[static_cast<std::size_t>(i)]
@@ -135,7 +143,7 @@ std::string Scheduler::name_of(int i) const
 std::vector<Event> Scheduler::pool_guard(uint64_t beat)
 {
 	std::vector<Event> out;
-	const bool empty = normal_idx().empty();
+	const bool empty = pool_is_empty();
 	if (empty && !pool_empty_) {
 		pool_empty_ = true;
 		Event e;
