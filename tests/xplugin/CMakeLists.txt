@@ -3,7 +3,8 @@
 #                  and the Music Director + Palette Director equivalence with PD 1.2.0 (golden)
 #   xplugin_cd     Clip Director exactly-once (own executable: Clip and Scene Director both use
 #   xplugin_sd     Scene Director exactly-once   namespace cd for their cores)
-# All three are driven by the same scripted clock (clock_script.h).
+#   xplugin_osc    the shared common/osc codec and UDP transport (director_osc)
+# All are driven by the same scripted clock (clock_script.h).
 #   cmake -S tests/xplugin -B build-xplugin && cmake --build build-xplugin && ctest --test-dir build-xplugin
 cmake_minimum_required(VERSION 3.16)
 project(director_xplugin_tests C CXX)
@@ -35,6 +36,24 @@ add_library(
 )
 target_include_directories(director_midi_core PUBLIC ${DIRECTOR_ROOT}/common/midi)
 target_link_libraries(director_midi_core PUBLIC Threads::Threads)
+
+# The shared OSC library (codec + UDP transport), namespace director_osc. No plugin links it yet.
+add_library(
+  director_osc
+  STATIC
+  ${DIRECTOR_ROOT}/common/osc/osc.cpp
+  ${DIRECTOR_ROOT}/common/osc/osc-transport.cpp
+)
+target_include_directories(director_osc PUBLIC ${DIRECTOR_ROOT}/common/osc)
+target_link_libraries(director_osc PUBLIC Threads::Threads)
+if(MSVC)
+  target_compile_options(director_osc PRIVATE /W4 /WX)
+else()
+  target_compile_options(director_osc PRIVATE -Wall -Wextra -Werror)
+endif()
+if(WIN32)
+  target_link_libraries(director_osc PUBLIC ws2_32)
+endif()
 
 # Music Director clock core (each library sees only its own plugin's headers)
 add_library(
@@ -87,3 +106,9 @@ add_executable(xplugin_sd test_xonce_sd.cpp ${PLUGINS}/scene-director/src/core/s
 target_include_directories(xplugin_sd PRIVATE ${PLUGINS} ${PLUGINS}/scene-director/src/core ${DOCTEST})
 target_compile_options(xplugin_sd PRIVATE ${XP_WARN})
 add_test(NAME xplugin_sd COMMAND xplugin_sd)
+
+add_executable(xplugin_osc main.cpp test_osc.cpp test_osc_transport.cpp)
+target_include_directories(xplugin_osc PRIVATE ${DOCTEST} ${DIRECTOR_ROOT}/common/osc)
+target_link_libraries(xplugin_osc PRIVATE director_osc)
+target_compile_options(xplugin_osc PRIVATE ${XP_WARN})
+add_test(NAME xplugin_osc COMMAND xplugin_osc)
