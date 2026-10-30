@@ -71,6 +71,11 @@ public:
 	float pfade() const { return pfade_; }
 	int rotation_offset() const { return rot_; }
 	int cooldown_left() const { return cooldown_; }
+	/* Palette feed (spec 3.2): +1 on every live palette change of this filter (section, phrase
+	 * rotation, manual, force-live restore, each drop-cycle step); cycling() tells whether that
+	 * last change came from a drop colour cycle step. */
+	uint64_t palette_seq() const { return palette_seq_; }
+	bool cycling() const { return cycling_; }
 
 private:
 	std::vector<int> normal_idx() const;
@@ -101,6 +106,9 @@ private:
 	bool forced_on_ = false;
 	// drop colour cycle
 	bool cycle_active_ = false;
+	// palette feed
+	uint64_t palette_seq_ = 0;
+	bool cycling_ = false;
 	double cycle_start_ = 0.0;   // beat the cycle started on (the drop downbeat)
 	int cycle_steps_ = 0;        // hard cuts in the cycle
 	int cycle_next_ = 0;         // next step to cut

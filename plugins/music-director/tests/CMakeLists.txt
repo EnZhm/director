@@ -48,6 +48,7 @@ add_executable(
   test_breakdown_bpm.cpp
   test_audio_level.cpp
   test_clock_api.cpp
+  test_clock_phrase_beat.cpp
   test_music_commands.cpp
   test_clock_epoch.cpp
   test_migration.cpp

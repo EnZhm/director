@@ -28,6 +28,8 @@ void Scheduler::reset(const SchedulerConfig &cfg)
 	forced_on_ = false;
 	cycle_active_ = false;
 	cycle_seq_.clear();
+	palette_seq_ = 0;
+	cycling_ = false;
 }
 
 void Scheduler::reconfigure(const SchedulerConfig &cfg, int live)
@@ -61,12 +63,16 @@ void Scheduler::reconfigure(const SchedulerConfig &cfg, int live)
 		prev_ = -1;
 		pfade_ = 1.0f;
 		rot_ = 0;
+		palette_seq_++; // the feed's seq counts every live palette change
+		cycling_ = false;
 	}
 	if (live_ >= cfg_.palette_count || live_ < 0) {
 		live_ = cfg_.palette_count > 0 ? cfg_.palette_count - 1 : 0;
 		prev_ = -1;
 		pfade_ = 1.0f;
 		rot_ = 0;
+		palette_seq_++;
+		cycling_ = false;
 	}
 	if (prev_ >= cfg_.palette_count)
 		prev_ = -1;
@@ -170,6 +176,8 @@ std::vector<Event> Scheduler::go_live(int i, const std::string &why, uint64_t be
 	if (i == live_)
 		return {};
 
+	palette_seq_++; // palette feed: a real live palette change
+	cycling_ = false;
 	prev_ = live_;
 	live_ = i;
 	pfade_ = (cfg_.crossfade_beats <= 0.0f) ? 1.0f : 0.0f;
@@ -526,6 +534,8 @@ void Scheduler::cycle_cut(int i, int step, uint64_t beat, std::vector<Event> &ou
 {
 	if (i == live_)
 		return;
+	palette_seq_++; // palette feed: a drop-cycle step is a live palette change
+	cycling_ = true;
 	prev_ = live_;
 	live_ = i;
 	pfade_ = 1.0f; // hard cut, whatever crossfade_beats says

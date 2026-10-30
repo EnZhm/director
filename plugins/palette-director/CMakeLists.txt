@@ -53,6 +53,7 @@ target_sources(
     src/ui/pd-ui.cpp
     src/director/palette-director.cpp
     src/director/scheduler.cpp
+    src/director/palette-snapshot.cpp
     src/dock/dock-widgets.cpp
     src/dock/palette-director-dock.cpp
 )

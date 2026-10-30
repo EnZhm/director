@@ -553,6 +553,7 @@ void proc_clock(void *, calldata_t *cd)
 	calldata_set_int(cd, "beat", (long long)s.st.beat);
 	calldata_set_int(cd, "phrase", (long long)s.st.phrase);
 	calldata_set_int(cd, "phrase_beats", s.st.phrase_beats);
+	calldata_set_int(cd, "phrase_beat", (long long)s.st.phrase_beat);
 	calldata_set_int(cd, "section", static_cast<int>(s.st.section));
 	calldata_set_int(cd, "section_seq", (long long)s.st.section_seq);
 	calldata_set_int(cd, "section_beat", (long long)s.st.section_beat);
@@ -590,6 +591,7 @@ void register_clock_proc()
 		ph,
 		"void director_clock(out bool ok, out int api_version, out float beats, out float beats_now, "
 		"out float bpm, out float confidence, out int beat, out int phrase, out int phrase_beats, "
+		"out int phrase_beat, "
 		"out int section, out int section_seq, out int section_beat, out bool section_forced, out int epoch, "
 		"out int kicks, "
 		"out float bass, out bool silent, out bool paused, out bool enabled, out int sample_ts_ns, "

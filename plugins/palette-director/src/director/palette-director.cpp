@@ -263,6 +263,8 @@ struct PaletteDirector::Impl {
 		st.force_off = scheduler_.force_off();
 		st.enabled = set_.director.enabled;
 		st.drop_cycle = scheduler_.drop_cycle_active();
+		st.palette_seq = scheduler_.palette_seq();
+		st.cycling = scheduler_.cycling();
 		return st;
 	}
 
