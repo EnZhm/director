@@ -7,7 +7,7 @@ visuals show through. Part of the [Director](https://github.com/EnZhm/director) 
 
 | | |
 |---|---|
-| Version | 1.2.0 |
+| Version | 2.1.0 |
 | Platform | Windows 10/11 x64 |
 | OBS Studio | 32.2.x (built against 32.2.2) |
 | Licence | GPL-2.0 |
@@ -67,11 +67,36 @@ Below it, Set-up opens the tabs:
 | Tab | What is in it |
 |---|---|
 | Set | Pick a set; New / Duplicate / Rename / Delete / Save / Load file...; Synesthesia playlist |
-| Palettes | Reorder, Go live, Set as breakdown, New / Duplicate / Delete, and the palette editor (name, gradient map or duotone, 2-8 colours, sort dark to bright, reverse) |
+| Palettes | Reorder, Go live, Set as breakdown, New / Duplicate / Delete, and the palette editor (name, gradient map or duotone, 2-8 colours, sort dark to bright, reverse, In automatic pool) |
 | Look | Coverage, Input black / white, Brightness from, Contrast, Keep brightness |
 | Changes | When palettes change (every drop, every N phrases, random, manual), order, crossfade, breakdown palette |
 | Director | Director enabled, lock behaviours (random off, off on breakdown, off on drop, breathing, colour rotation, seed) and the drop colour cycle |
 | Log | The Director's full decision log |
+
+## The palette pool
+
+Each palette in a set is either in the **automatic pool** or out of it. The Director only picks
+in-pool palettes by itself; out-of-pool palettes stay in the set for you to play by hand.
+
+- **Take a palette out of the pool:** right-click its pad and untick **In automatic pool**, or
+  untick the same checkbox in the palette editor (Set-up > Palettes). Tick it again to put it back.
+  It works live, during a set.
+- **Dimmed pads** (about 35% opacity, with a small "off" in the corner) are out of the pool. When a
+  dimmed palette is live, its pad still shows the live highlight.
+- **Automatic changes skip out-of-pool palettes:** phrase rotation, the drop pick, the palette
+  after a breakdown, the drop colour cycle and Next / Prev palette (hotkeys and dock buttons).
+- **A pad press still plays an out-of-pool palette**, at once, like any pad. The log says
+  `manual '<name>' (out of the automatic pool)`.
+- **A toggle never interrupts the picture.** It applies from the next automatic change: the live
+  palette, a running crossfade and a running drop colour cycle carry on.
+- **Breakdown palette out of the pool:** a breakdown keeps the current palette and logs
+  `breakdown palette '<name>' is out of the pool; holding '<live>'`.
+- **One palette left** in the pool: automatic changes hold on it. **None left:** automatic changes
+  keep the live palette; the log says `automatic pool is empty; holding '<live>'` once, and
+  `automatic pool has a palette again` when one comes back.
+- **Saved per set.** The flag is stored on each palette, in the filter settings and in the set file
+  (key `pool`, written only when a palette is out). Sets from 2.0 load with every palette in the
+  pool.
 
 ## The Music dock
 

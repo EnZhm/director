@@ -1,11 +1,10 @@
-Clip Director 2.0.0 for OBS Studio 32.2.x (Windows x64)
+Clip Director 2.1.0 for OBS Studio 32.2.x (Windows x64)
 =======================================================
 
-New in 2.0.0: Clip Director is clips only. It follows Music Director's clock
-(director_clock) and holds when Music Director is not loaded. Synesthesia OSC
-scene control and the MIDI Director dock are gone: Synesthesia is driven by
-Scene Director, and MIDI by Music Director. A third armed deck lets a
-breakdown and a drop cut on the section beat.
+Clip Director is clips only. It follows Music Director's clock
+(director_clock) and holds when Music Director is not loaded. Synesthesia is
+driven by Scene Director over OSC. A third armed deck lets a breakdown and a
+drop cut on the section beat.
 
 Clip Director is an OBS source that plays folders of video clips in time with
 the music. It follows Music Director's beat clock and cuts on the beat,
@@ -28,14 +27,14 @@ Director".
 ----------
 1. Close OBS.
 2. Either install the suite (the four plugins in one step:
-   director-2.0.0-windows-x64.zip from
+   director-2.1.0-windows-x64.zip from
    https://github.com/EnZhm/director/releases) or install Music Director 2.0.0
    on its own first, then this plugin. With either route the folder
    C:\ProgramData\obs-studio\plugins\music-director must be there and hold
-   2.0.0.
+   2.0.0 or later.
    Upgrading from 1.x: remove the old "palette-director", "clip-director" and
    "scene-director" folders first.
-3. Unzip clip-director-2.0.0-windows-x64.zip and copy the folder
+3. Unzip clip-director-2.1.0-windows-x64.zip and copy the folder
    "clip-director" into
      C:\ProgramData\obs-studio\plugins\
    so that these files exist:
@@ -43,8 +42,8 @@ Director".
      C:\ProgramData\obs-studio\plugins\clip-director\data\effects\cd-composite.effect
      C:\ProgramData\obs-studio\plugins\clip-director\data\locale\en-US.ini
 4. Start OBS. Help > Log Files > View Current Log should show
-     [clip-director] plugin loaded successfully (version 2.0.0)
-     [music-director] plugin loaded successfully (version 2.0.0)
+     [clip-director] plugin loaded successfully (version 2.1.0)
+     [music-director] plugin loaded successfully (version 2.1.0)
 
 
 2. Prepare the clip folders (once per folder, recommended)
@@ -112,15 +111,14 @@ armed decks, Skip / Hold / Ban, the clip folders and the log.
 All of this is saved with the scene collection.
 
 
-5. Synesthesia and MIDI
------------------------
-Handler moved out of Clip Director:
+5. Synesthesia and hotkeys
+--------------------------
 - Synesthesia scenes are driven by Scene Director (playlist Next / Prev over
-  MIDI out), on the same section beat as the clip cut.
-- MIDI is the Music Director MIDI Director dock: it maps MIDI notes and CCs
-  to any OBS hotkey, including Clip Director's Skip / Hold / Ban.
-Clip Director still sends its picture to Synesthesia over Spout; no OSC is
-used any more.
+  OSC), on the same section beat as the clip cut.
+- Skip / Hold / Ban are OBS hotkeys (cd_skip, cd_hold, cd_ban): bind them to
+  keys in OBS Settings > Hotkeys, or to Stream Deck buttons with Stream
+  Deck's OBS hotkey action.
+Clip Director sends its picture to Synesthesia over Spout; no OSC is used.
 
 
 6. How it cuts
