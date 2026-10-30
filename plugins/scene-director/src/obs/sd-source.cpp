@@ -839,6 +839,15 @@ void set_scene_lead(obs_source_t *src, double lead_ms)
 		       [&](obs_data_t *s) { obs_data_set_double(s, "syn_lead_ms", std::clamp(lead_ms, 0.0, 500.0)); });
 }
 
+void set_osc(obs_source_t *src, const std::string &host, int send_port, int feedback_port)
+{
+	write_settings(src, [&](obs_data_t *s) {
+		obs_data_set_string(s, "osc_host", host.c_str());
+		obs_data_set_int(s, "osc_send_port", std::clamp(send_port, 1, 65535));
+		obs_data_set_int(s, "osc_feedback_port", std::clamp(feedback_port, 0, 65535));
+	});
+}
+
 void manual_next(obs_source_t *src)
 {
 	SdSource *c = sd_of(src);
