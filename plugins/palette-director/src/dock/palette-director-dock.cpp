@@ -43,6 +43,8 @@ Closing the dock only stops the poll timer; the Director keeps running.
 #include <QAbstractItemModel>
 #include <QAbstractSlider>
 #include <QAbstractSpinBox>
+#include <QAction>
+#include <QContextMenuEvent>
 #include <QEvent>
 #include <QCheckBox>
 #include <QColorDialog>
@@ -58,6 +60,7 @@ Closing the dock only stops the poll timer; the Director keeps running.
 #include <QLinearGradient>
 #include <QListWidget>
 #include <QMainWindow>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -148,15 +151,29 @@ public:
 	struct pl_palette pal = {};
 	int index = 0;
 	bool live = false, next = false, breakdown = false;
+	bool in_pool = true;
 	bool flash = false; // v1.0.1 drop cycle: the live pad flashes with each cut
 	float pfade = 1.0f;
 	std::function<void(int)> on_tap;
+	std::function<void(int)> on_toggle_pool;
 
 protected:
 	void mouseReleaseEvent(QMouseEvent *e) override
 	{
 		if (e->button() == Qt::LeftButton && rect().contains(e->position().toPoint()) && on_tap)
 			on_tap(index);
+	}
+
+	void contextMenuEvent(QContextMenuEvent *e) override
+	{
+		if (!on_toggle_pool)
+			return;
+		QMenu menu(this);
+		QAction *act = menu.addAction(T("Dock.InPool"));
+		act->setCheckable(true);
+		act->setChecked(in_pool);
+		if (menu.exec(e->globalPos()) == act)
+			on_toggle_pool(index);
 	}
 
 	void paintEvent(QPaintEvent *) override
@@ -168,18 +185,18 @@ protected:
 		const QRectF r = QRectF(rect()).adjusted(2, 2, -2, -2);
 		QPainterPath bg;
 		bg.addRoundedRect(r, 7, 7);
+
+		/* an out-of-pool pad is dimmed to ~35% opacity; the live highlight and the "off"
+		 * corner mark are drawn at full opacity afterwards (spec 7.1) */
+		const bool dim = !in_pool;
+		p.setOpacity(dim ? 0.35 : 1.0);
+
 		p.fillPath(bg, pl.color(QPalette::Base));
 		if (live && flash) {
 			QColor fc = pl.color(QPalette::Highlight);
 			fc.setAlpha(110);
 			p.fillPath(bg, fc);
 		}
-		QPen pen(live ? hl : (next ? pl.color(QPalette::WindowText) : pl.color(QPalette::Mid)));
-		pen.setWidthF(live ? 3.0 : (next ? 1.5 : 1.0));
-		if (next && !live)
-			pen.setStyle(Qt::DashLine);
-		p.setPen(pen);
-		p.drawPath(bg);
 
 		QFont f = font();
 		f.setBold(true);
@@ -188,16 +205,6 @@ protected:
 		const QRectF nameR(r.left() + 8, r.top() + 5, r.width() - 54, 18);
 		p.drawText(nameR, Qt::AlignLeft | Qt::AlignVCenter,
 			   p.fontMetrics().elidedText(QString::fromUtf8(pal.name), Qt::ElideRight, (int)nameR.width()));
-
-		QFont bf = font();
-		bf.setBold(true);
-		bf.setPointSizeF(std::max(6.0, bf.pointSizeF() * 0.78));
-		p.setFont(bf);
-		if (live || next) {
-			p.setPen(live ? hl : pl.color(QPalette::WindowText));
-			p.drawText(QRectF(r.right() - 48, r.top() + 5, 42, 16), Qt::AlignRight | Qt::AlignVCenter,
-				   live ? "LIVE" : "NEXT");
-		}
 
 		fill_ramp(p, QRectF(r.left() + 8, r.top() + 26, r.width() - 16, 20), pal);
 
@@ -213,9 +220,42 @@ protected:
 		p.drawText(QRectF(r.left() + 8, r.top() + 49, r.width() - 16, 16), Qt::AlignLeft | Qt::AlignVCenter,
 			   sub);
 
+		p.setOpacity(1.0);
+
+		QPen pen(live ? hl : (next ? pl.color(QPalette::WindowText) : pl.color(QPalette::Mid)));
+		pen.setWidthF(live ? 3.0 : (next ? 1.5 : 1.0));
+		if (next && !live)
+			pen.setStyle(Qt::DashLine);
+		p.setPen(pen);
+		p.drawPath(bg);
+
+		QFont bf = font();
+		bf.setBold(true);
+		bf.setPointSizeF(std::max(6.0, bf.pointSizeF() * 0.78));
+		p.setFont(bf);
+		if (live || next) {
+			p.setPen(live ? hl : pl.color(QPalette::WindowText));
+			p.drawText(QRectF(r.right() - 48, r.top() + 5, 42, 16), Qt::AlignRight | Qt::AlignVCenter,
+				   live ? "LIVE" : "NEXT");
+		}
+
 		if (live) {
 			const double w = (r.width() - 8) * std::clamp(pfade, 0.0f, 1.0f);
 			p.fillRect(QRectF(r.left() + 4, r.bottom() - 5, w, 3), hl);
+		}
+
+		/* small "off" corner mark on an out-of-pool pad */
+		if (dim) {
+			const QRectF offR(r.right() - 20, r.bottom() - 16, 17, 12);
+			p.setPen(QPen(pl.color(QPalette::Mid), 1.0));
+			p.setBrush(pl.color(QPalette::Base));
+			p.drawRoundedRect(offR, 3, 3);
+			QFont of = font();
+			of.setBold(true);
+			of.setPointSizeF(std::max(5.0, of.pointSizeF() * 0.6));
+			p.setFont(of);
+			p.setPen(pl.color(QPalette::PlaceholderText));
+			p.drawText(offR, Qt::AlignCenter, "off");
 		}
 	}
 };
@@ -377,6 +417,9 @@ protected:
 			pads[i]->index = i;
 			pads[i]->on_tap = [this](int idx) {
 				send(PD_CMD_GO_LIVE, idx);
+			};
+			pads[i]->on_toggle_pool = [this](int idx) {
+				toggle_pool(idx);
 			};
 			pads[i]->hide();
 		}
@@ -553,6 +596,8 @@ protected:
 		palMode->addItem(T("Dock.ModeGradient"), PL_MODE_GRADIENT);
 		palMode->addItem(T("Dock.ModeDuotone"), PL_MODE_DUOTONE);
 		form->addRow(T("Dock.PalMode"), palMode);
+		palPool = new QCheckBox(T("Dock.InPool"), w);
+		form->addRow(palPool);
 		v->addLayout(form);
 		ramp = new RampWidget(w);
 		v->addWidget(ramp);
@@ -657,6 +702,14 @@ protected:
 			ns.palettes[sel_pal].mode = palMode->itemData(i).toInt();
 			commit(ns, -1,
 			       QString("palette '%1' mode -> %2").arg(pal_name(), i ? "duotone" : "gradient map"));
+		});
+		QObject::connect(palPool, &QCheckBox::toggled, this, [this](bool on) {
+			if (filling || !valid_pal())
+				return;
+			struct pl_set ns = model;
+			ns.palettes[sel_pal].in_pool = on;
+			commit(ns, -1,
+			       QString("palette '%1' %2 the automatic pool").arg(pal_name(), on ? "in" : "out of"));
 		});
 		QObject::connect(bPalNew, &QPushButton::clicked, this, [this] {
 			struct pl_set ns = model;
@@ -1090,6 +1143,13 @@ public:
 			pads[i]->on_tap(i);
 	}
 
+	void test_toggle_pool(int i)
+	{
+		blog(LOG_INFO, "[palette-director] dock test: toggle automatic pool on pad %d", i + 1);
+		if (i >= 0 && i < PL_MAX_PALETTES)
+			toggle_pool(i);
+	}
+
 private:
 	int snap_n = 0;
 #endif
@@ -1099,6 +1159,18 @@ private:
 	bool valid_pal() const { return sel_pal >= 0 && sel_pal < model.n_palettes; }
 	bool valid_sw() const { return valid_pal() && sel_sw >= 0 && sel_sw < model.palettes[sel_pal].n_colours; }
 	QString pal_name() const { return valid_pal() ? QString::fromUtf8(model.palettes[sel_pal].name) : QString(); }
+
+	void toggle_pool(int idx)
+	{
+		if (idx < 0 || idx >= model.n_palettes)
+			return;
+		struct pl_set ns = model;
+		ns.palettes[idx].in_pool = !ns.palettes[idx].in_pool;
+		const QString nm = QString::fromUtf8(ns.palettes[idx].name);
+		commit(ns, -1,
+		       QString("palette '%1' %2 the automatic pool")
+			       .arg(nm, ns.palettes[idx].in_pool ? "in" : "out of"));
+	}
 
 	void commit(const struct pl_set &ns, int force_live, const QString &why)
 	{
@@ -1388,9 +1460,9 @@ private:
 	{
 		const bool ok = valid_pal();
 		for (QWidget *wdg :
-		     {static_cast<QWidget *>(palName), static_cast<QWidget *>(palMode), static_cast<QWidget *>(swList),
-		      static_cast<QWidget *>(swHex), static_cast<QWidget *>(bPalLive), static_cast<QWidget *>(bPalDup),
-		      static_cast<QWidget *>(bPalDel), static_cast<QWidget *>(bPalBd)})
+		     {static_cast<QWidget *>(palName), static_cast<QWidget *>(palMode), static_cast<QWidget *>(palPool),
+		      static_cast<QWidget *>(swList), static_cast<QWidget *>(swHex), static_cast<QWidget *>(bPalLive),
+		      static_cast<QWidget *>(bPalDup), static_cast<QWidget *>(bPalDel), static_cast<QWidget *>(bPalBd)})
 			wdg->setEnabled(ok);
 		bPalNew->setEnabled(model.n_palettes < PL_MAX_PALETTES);
 		if (!ok)
@@ -1399,6 +1471,7 @@ private:
 		if (!palName->hasFocus())
 			palName->setText(QString::fromUtf8(p.name));
 		set_combo_data(palMode, p.mode);
+		set_check(palPool, p.in_pool);
 		ramp->pal = p;
 		ramp->update();
 		bPalDup->setEnabled(model.n_palettes < PL_MAX_PALETTES);
@@ -1695,6 +1768,7 @@ private:
 			PadWidget *pw = pads[i];
 			pw->flash = cycle_flash > 0;
 			pw->pal = set.palettes[i];
+			pw->in_pool = set.palettes[i].in_pool;
 			pw->live = i == st.live_palette;
 			pw->next = i == st.next_palette && i != st.live_palette;
 			pw->breakdown = i == bd;
@@ -1759,6 +1833,7 @@ private:
 	QPushButton *bPalNew = nullptr, *bPalLive = nullptr, *bPalDup = nullptr, *bPalDel = nullptr, *bPalBd = nullptr;
 	QLineEdit *palName = nullptr, *swHex = nullptr;
 	QComboBox *palMode = nullptr;
+	QCheckBox *palPool = nullptr;
 	RampWidget *ramp = nullptr;
 	QPushButton *bSwPick = nullptr, *bSwRemove = nullptr, *bSwAdd = nullptr, *bSwSort = nullptr, *bSwRev = nullptr;
 	/* look tab */

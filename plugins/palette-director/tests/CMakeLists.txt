@@ -55,6 +55,7 @@ add_executable(
   test_set_file.cpp
   test_drop_cycle.cpp
   test_follower.cpp
+  test_pool.cpp
 )
 target_link_libraries(pd_director_tests PRIVATE pd_palette_director pd_palette)
 target_compile_definitions(pd_director_tests PRIVATE PD_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")

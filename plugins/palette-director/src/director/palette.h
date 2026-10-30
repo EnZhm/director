@@ -17,6 +17,7 @@ struct PaletteSpec {
 	std::string name;
 	RecolourMode mode = RecolourMode::GradientMap;
 	std::vector<Colour> colours;
+	bool in_pool = true; // automatic pool (spec 7.1); false = out of the pool
 };
 
 } // namespace pd

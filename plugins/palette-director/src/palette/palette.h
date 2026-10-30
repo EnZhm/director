@@ -64,6 +64,7 @@ struct pl_palette {
 	int mode; /* enum pl_mode */
 	int n_colours;
 	struct pl_colour colours[PL_MAX_COLOURS];
+	bool in_pool; /* automatic pool (spec 7.1): true = in; serialised only when false */
 };
 
 enum pl_trigger {

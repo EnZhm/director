@@ -299,6 +299,87 @@ TEST_CASE("v1.0.1 drop_cycle keys: missing = disabled, every rate round-trips, b
 	CHECK(std::string(err).find("drop_cycle rate") != std::string::npos);
 }
 
+TEST_CASE("v2.1 palette pool: pool:false round-trips byte-identical; absent = in the pool")
+{
+	struct pl_set s;
+	pl_set_init(&s);
+	snprintf(s.name, sizeof(s.name), "Pooled");
+	s.n_palettes = 4;
+	for (int i = 0; i < 4; i++) {
+		pl_palette_default(&s.palettes[i], "");
+		snprintf(s.palettes[i].name, sizeof(s.palettes[i].name), "Pal %d", i);
+	}
+	s.palettes[1].in_pool = false;
+	s.palettes[3].in_pool = false;
+	char *out = pd_set_write(&s);
+	REQUIRE(out != nullptr);
+	/* the key is written ONLY where false */
+	int n_pool = 0;
+	for (const char *p = out; (p = strstr(p, "\"pool\": false")) != nullptr; p++)
+		n_pool++;
+	CHECK(n_pool == 2);
+
+	struct pl_set s2;
+	char err[256] = {0};
+	REQUIRE_MESSAGE(pd_set_parse(out, &s2, err, sizeof(err)), err);
+	CHECK(s2.palettes[0].in_pool == true);
+	CHECK(s2.palettes[1].in_pool == false);
+	CHECK(s2.palettes[2].in_pool == true);
+	CHECK(s2.palettes[3].in_pool == false);
+	char *out2 = pd_set_write(&s2);
+	CHECK(std::string(out) == std::string(out2)); // byte-identical
+	pd_set_free(out);
+	pd_set_free(out2);
+
+	/* a 2.0-style set (no pool key) loads with every palette in the pool and stays absent */
+	const char *old = "{\"schema\": 2, \"name\": \"Old\", \"palettes\": ["
+			  "{\"name\": \"a\", \"mode\": \"gradient_map\", \"colours\": [\"#000000\", \"#FFFFFF\"]},"
+			  "{\"name\": \"b\", \"mode\": \"gradient_map\", \"colours\": [\"#000000\", \"#FFFFFF\"]}]}";
+	struct pl_set s3;
+	REQUIRE_MESSAGE(pd_set_parse(old, &s3, err, sizeof(err)), err);
+	CHECK(s3.palettes[0].in_pool == true);
+	CHECK(s3.palettes[1].in_pool == true);
+	char *out3 = pd_set_write(&s3);
+	CHECK(std::strstr(out3, "\"pool\"") == nullptr); // never written when every palette is in
+	struct pl_set s4;
+	REQUIRE_MESSAGE(pd_set_parse(out3, &s4, err, sizeof(err)), err);
+	char *out4 = pd_set_write(&s4);
+	CHECK(std::string(out3) == std::string(out4));
+	pd_set_free(out3);
+	pd_set_free(out4);
+}
+
+TEST_CASE("v2.1 palette pool: new and duplicated palettes are in the pool")
+{
+	struct pl_set s;
+	pl_set_init(&s);
+	snprintf(s.name, sizeof(s.name), "Lifecycle");
+	s.n_palettes = 1;
+	pl_palette_default(&s.palettes[0], "Pal 0");
+	s.palettes[0].in_pool = false; // the source is out of the pool
+
+	int idx = -1;
+	REQUIRE(pl_add_palette(&s, "Pal 1", &idx));
+	CHECK(s.palettes[idx].in_pool == true); // new -> in the pool
+
+	int live = 0, edit = 0, dup = -1;
+	REQUIRE(pl_duplicate_palette(&s, 0, &live, &edit, &dup));
+	CHECK(s.palettes[dup].in_pool == true); // duplicated -> in the pool (not copied from the source)
+}
+
+TEST_CASE("v2.1 palette pool: the bundled preset has no pool key and loads all-in-pool")
+{
+	const std::string src = slurp(kBundled);
+	struct pl_set s;
+	char err[256] = {0};
+	REQUIRE_MESSAGE(pd_set_parse(src.c_str(), &s, err, sizeof(err)), err);
+	for (int i = 0; i < s.n_palettes; i++)
+		CHECK(s.palettes[i].in_pool == true);
+	char *out = pd_set_write(&s);
+	CHECK(std::string(out) == src); // the bundled file round-trips byte-identical
+	pd_set_free(out);
+}
+
 TEST_CASE("a spectrum-style set (16 palettes, 5-8 colours) round-trips byte-identical")
 {
 	/* Spectrum palettes (spec 4.1): 16 gradient_map palettes with 5-8 stops. Build it, write
