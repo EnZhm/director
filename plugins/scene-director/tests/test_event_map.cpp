@@ -336,3 +336,18 @@ TEST_CASE("byte-fuzz: random and truncated mutations of the defaults never crash
 	const EventMap::ParseResult r = m.parse(deep);
 	CHECK_FALSE(r.syntax_ok);
 }
+
+TEST_CASE("cooldown_group: defaults share 'scene'; absent = own id; invalid is rejected")
+{
+	const EventMap d = EventMap::defaults();
+	for (const Mapping &m : d.mappings())
+		if (m.id == "breakdown-next" || m.id == "drop-next" || m.id == "manual-next" || m.id == "manual-prev")
+			CHECK(m.cooldown_group == "scene");
+	const EventMap own = load(R"({"version":1,"mappings":[{"id":"x","event":"drop",
+	   "actions":[{"route":"/playlist/next"}]}]})");
+	REQUIRE(own.mappings().size() == 1);
+	CHECK(own.mappings()[0].cooldown_group == "x");
+	const EventMap::ParseResult r = parse(R"({"version":1,"mappings":[{"id":"x","event":"drop",
+	   "cooldown_group":"Bad Group!","actions":[{"route":"/playlist/next"}]}]})");
+	CHECK(r.rejects.size() == 1);
+}

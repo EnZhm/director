@@ -63,3 +63,39 @@ TEST_CASE("concurrent claims for one key: exactly one wins")
 		REQUIRE(winners.load() == 1);
 	}
 }
+
+// ---- per-source ownership (SourceClaims) ----
+
+TEST_CASE("a source that claims an event sends all of its own plans for it")
+{
+	EventGuard g;
+	SourceClaims a, b;
+	// source A has two mappings on the same drop (two actions): both go out
+	CHECK(a.may_send(g, "drop", "7"));
+	CHECK(a.may_send(g, "drop", "7"));
+	// source B sees the same drop: skipped, for every one of its plans
+	CHECK_FALSE(b.may_send(g, "drop", "7"));
+	CHECK_FALSE(b.may_send(g, "drop", "7"));
+	// the next drop can be won by either
+	CHECK(b.may_send(g, "drop", "8"));
+	CHECK_FALSE(a.may_send(g, "drop", "8"));
+}
+
+TEST_CASE("empty keys (manual, scene_loaded) are always the source's own")
+{
+	EventGuard g;
+	SourceClaims a, b;
+	CHECK(a.may_send(g, "manual_next", ""));
+	CHECK(b.may_send(g, "manual_next", ""));
+	CHECK(a.may_send(g, "scene_loaded", ""));
+	CHECK(b.may_send(g, "scene_loaded", ""));
+}
+
+TEST_CASE("the owned set stays bounded in a long set")
+{
+	EventGuard g;
+	SourceClaims a;
+	for (int i = 0; i < 5000; ++i)
+		REQUIRE(a.may_send(g, "bar", std::to_string(i)));
+	CHECK(a.owned() <= 1024);
+}

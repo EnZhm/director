@@ -50,6 +50,10 @@ public:
 
 	void set_map(const EventMap &map);
 	void set_lead_ms(double lead_ms);
+	// Plans whose send time is at most this far ahead are released early, with an absolute
+	// deadline (send_at_ns) for the transport to hold them to. 0 (the default) releases a plan only
+	// once its send beat has arrived. The OBS source uses 50 ms (spec 4.5).
+	void set_release_horizon_ms(double ms);
 
 	// One tick. `now_ns` is the monotonic wall-clock at this tick (used for debounce and the
 	// send_at_ns deadline; 0 disables both). Returns the sends whose time has arrived.
@@ -62,6 +66,7 @@ public:
 private:
 	struct Pending {
 		std::string mapping_id;
+		std::string cooldown_group;
 		std::string event;
 		std::string key;
 		std::string route;
@@ -72,9 +77,14 @@ private:
 	};
 
 	struct MappingState {
-		double last_fire_beat = 0.0; // cooldown anchor (min_interval_beats)
-		bool fired = false;
 		int64_t last_fire_ns = 0; // debounce anchor (debounce_ms)
+	};
+
+	// One cooldown anchor per cooldown_group (2.0: one anchor shared by breakdown, drop and
+	// manual Next/Prev; a manual press restarts it).
+	struct CooldownState {
+		double last_fire_beat = 0.0;
+		bool fired = false;
 	};
 
 	double lead_beats(double bpm) const;
@@ -90,12 +100,14 @@ private:
 
 	EventMap map_;
 	double lead_ms_ = 0.0;
+	double horizon_ms_ = 0.0;
 	bool started_ = false;
 	int64_t last_epoch_ = 0;
 	int64_t last_beat_ = 0;
 	int64_t last_phrase_ = 0;
 	std::vector<Pending> pending_;
 	std::map<std::string, MappingState> state_;
+	std::map<std::string, CooldownState> cooldown_;
 	std::vector<std::string> log_;
 };
 

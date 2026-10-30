@@ -359,3 +359,108 @@ TEST_CASE("an invalid sample (Music Director missing) still sends manual events"
 	REQUIRE(s.size() == 1);
 	CHECK(s[0].event == "manual_next");
 }
+
+// ---- 2.1 hands-on completion: shared cooldown, resync reset, 50 ms release, scene_loaded ----
+
+TEST_CASE("breakdown and drop share one cooldown anchor (2.0 equivalence)")
+{
+	// 2.0's SwitchScheduler had one cooldown for every switch: a drop 8 beats after a breakdown
+	// switch is suppressed, exactly as before.
+	EventEngine eng(EventMap::defaults());
+	eng.tick(at(30.0, Section::Groove), {}, {}, 0);
+	REQUIRE(eng.tick(edge(32.0, Section::Breakdown, 1, 32), sec_edge(), {}, 0).size() == 1);
+	CHECK(eng.tick(edge(40.0, Section::Drop, 2, 40), sec_edge(), {}, 0).empty());
+	// past the 16-beat cooldown the next drop fires
+	REQUIRE(eng.tick(edge(48.0, Section::Drop, 3, 48), sec_edge(), {}, 0).size() == 1);
+}
+
+TEST_CASE("a manual press restarts the shared cooldown (2.0 equivalence)")
+{
+	EventEngine eng(EventMap::defaults());
+	eng.tick(at(0.0, Section::Groove), {}, {}, 0);
+	REQUIRE(eng.tick(at(30.0, Section::Groove), {}, {next()}, 0).size() == 1);
+	CHECK(eng.tick(edge(32.0, Section::Drop, 1, 32), sec_edge(), {}, 0).empty());
+	REQUIRE(eng.tick(edge(48.0, Section::Drop, 2, 48), sec_edge(), {}, 0).size() == 1);
+}
+
+TEST_CASE("mappings in different cooldown groups are independent")
+{
+	EventEngine eng(map_from(R"({"version":1,"mappings":[
+	  {"id":"a","event":"breakdown","min_interval_beats":16,"cooldown_group":"x",
+	   "actions":[{"route":"/playlist/next"}]},
+	  {"id":"b","event":"drop","min_interval_beats":16,"cooldown_group":"y",
+	   "actions":[{"route":"/playlist/previous"}]}]})"));
+	eng.tick(at(30.0, Section::Groove), {}, {}, 0);
+	REQUIRE(eng.tick(edge(32.0, Section::Breakdown, 1, 32), sec_edge(), {}, 0).size() == 1);
+	CHECK(eng.tick(edge(40.0, Section::Drop, 2, 40), sec_edge(), {}, 0).size() == 1);
+}
+
+TEST_CASE("a resync clears the cooldown so a clock reset cannot suppress switches")
+{
+	EventEngine eng(EventMap::defaults());
+	eng.tick(at(500.0, Section::Groove), {}, {}, 0);
+	REQUIRE(eng.tick(edge(512.0, Section::Breakdown, 1, 512), sec_edge(), {}, 0).size() == 1);
+	// the clock is reset to beat 0 (new epoch): without the reset the anchor at 512 would hold
+	// every automatic switch until the clock passed 528.
+	ClockSample r = at(0.0, Section::Groove);
+	r.epoch = 1;
+	eng.tick(r, resync(), {}, 0);
+	ClockSample d = edge(8.0, Section::Drop, 2, 8);
+	d.epoch = 1;
+	CHECK(eng.tick(d, sec_edge(), {}, 0).size() == 1);
+}
+
+TEST_CASE("release horizon: a plan is released up to 50 ms early with an exact deadline")
+{
+	// A drop edge announced ahead of its downbeat: section_beat 64, clock at 63.95 (128 BPM:
+	// 0.05 beats = 23.4 ms). With a 50 ms horizon it is released now, deadline = now + 23.4 ms.
+	EventEngine eng(EventMap::defaults());
+	eng.set_release_horizon_ms(50.0);
+	const int64_t t0 = 5'000'000'000;
+	eng.tick(at(60.0, Section::Groove), {}, {}, t0 - 1'000'000'000);
+	const std::vector<PlannedSend> s = eng.tick(edge(63.95, Section::Drop, 1, 64), sec_edge(), {}, t0);
+	REQUIRE(s.size() == 1);
+	CHECK(s[0].target_beat == doctest::Approx(64.0));
+	REQUIRE(s[0].has_send_at_ns);
+	const double ahead_ms = static_cast<double>(s[0].send_at_ns - t0) / 1e6;
+	CHECK(ahead_ms == doctest::Approx(0.05 * 60.0 / 128.0 * 1000.0).epsilon(0.01));
+}
+
+TEST_CASE("release horizon: a plan further ahead than 50 ms waits for a later tick")
+{
+	EventEngine eng(EventMap::defaults());
+	eng.set_release_horizon_ms(50.0);
+	eng.tick(at(60.0, Section::Groove), {}, {}, 1);
+	// 0.5 beats ahead at 128 BPM = 234 ms: held
+	CHECK(eng.tick(edge(63.5, Section::Drop, 1, 64), sec_edge(), {}, 2'000'000'000).empty());
+	CHECK(eng.tick(at(63.8, Section::Drop), {}, {}, 2'140'000'000).empty()); // 94 ms ahead
+	// 63.92 -> 37.5 ms ahead: released, exactly once
+	const std::vector<PlannedSend> s = eng.tick(at(63.92, Section::Drop), {}, {}, 2'197'000'000);
+	REQUIRE(s.size() == 1);
+	CHECK(s[0].send_at_ns > 2'197'000'000);
+	CHECK(eng.tick(at(64.0, Section::Drop), {}, {}, 2'234'000'000).empty());
+	CHECK(eng.tick(at(65.0, Section::Drop), {}, {}, 2'700'000'000).empty());
+}
+
+TEST_CASE("horizon 0 releases only once the send beat arrives, deadline = now")
+{
+	EventEngine eng(EventMap::defaults());
+	eng.tick(at(60.0, Section::Groove), {}, {}, 1);
+	CHECK(eng.tick(edge(63.95, Section::Drop, 1, 64), sec_edge(), {}, 1'000).empty());
+	const std::vector<PlannedSend> s = eng.tick(at(64.0, Section::Drop), {}, {}, 2'000);
+	REQUIRE(s.size() == 1);
+	CHECK(s[0].send_at_ns == 2'000);
+}
+
+TEST_CASE("scene_loaded plans carry no guard key and fire once per feedback datagram")
+{
+	EventEngine eng(map_from(R"({"version":1,"mappings":[
+	  {"id":"on-load","event":"scene_loaded","actions":[{"route":"/controls/meta/hue","args":[0.5]}]}]})"));
+	eng.tick(at(0.0, Section::Groove), {}, {}, 0);
+	std::vector<PlannedSend> s = eng.tick(at(1.0, Section::Groove), {}, {scene("beamers")}, 0);
+	REQUIRE(s.size() == 1);
+	CHECK(s[0].key.empty());
+	// the same scene name loaded again later is a new event, not a duplicate
+	s = eng.tick(at(40.0, Section::Groove), {}, {scene("beamers")}, 0);
+	CHECK(s.size() == 1);
+}

@@ -363,14 +363,13 @@ void apply_settings_defaults(Settings &s)
 	s.set_default_string("clock_source", "");
 	s.set_default_int("sync_offset_ms", 0);
 
-	s.set_default_string("midi_out_device", "");
-	s.set_default_string("next_type", "note");
-	s.set_default_int("next_channel", 16);
-	s.set_default_int("next_number", 60);
-	s.set_default_string("prev_type", "note");
-	s.set_default_int("prev_channel", 16);
-	s.set_default_int("prev_number", 59);
+	s.set_default_string("osc_host", "127.0.0.1");
+	s.set_default_int("osc_send_port", 7000);
+	s.set_default_int("osc_feedback_port", 7001);
+	s.set_default_int("confirm_timeout_ms", 2000);
 
+	/* The 2.0 trigger keys are kept verbatim (no new default is written, so a value carried
+	 * from 2.0 stays exactly as written) and only seed the event map on first run. */
 	s.set_default_bool("trigger_breakdown", true);
 	s.set_default_bool("trigger_drop", true);
 	s.set_default_int("cooldown_beats", 16);
@@ -380,14 +379,14 @@ void apply_settings_defaults(Settings &s)
 
 namespace {
 
-bool type_of(const Settings &s, const std::string &key, midi::Type &out)
+int clamp_port(long long v)
 {
-	midi::Type parsed = midi::Type::Note;
-	if (midi::type_from_string(s.get_string(key), parsed)) {
-		out = parsed;
-		return true;
-	}
-	return false;
+	return (int)std::clamp(v, 1ll, 65535ll);
+}
+
+int clamp_feedback_port(long long v)
+{
+	return (int)std::clamp(v, 0ll, 65535ll); /* 0 = no feedback */
 }
 
 } // namespace
@@ -395,17 +394,35 @@ bool type_of(const Settings &s, const std::string &key, midi::Type &out)
 SourceConfig read_config(const Settings &s)
 {
 	SourceConfig c;
-	c.clock = s.get_string("clock_source");
 	c.sync_offset_ms = (int)std::clamp((long long)s.get_int("sync_offset_ms"), -200ll, 200ll);
 
-	c.midi_out_device = s.get_string("midi_out_device");
+	/* Migration (spec 4.1): when an osc_* key is absent, seed it from Clip Director 1.1.0's
+	 * syn_* counterpart when that is present. The source logs this once per source. */
+	bool seeded = false;
+	if (s.has("osc_host")) {
+		c.osc_host = s.get_string("osc_host");
+	} else if (s.has("syn_host")) {
+		c.osc_host = s.get_string("syn_host");
+		seeded = true;
+	}
+	if (s.has("osc_send_port")) {
+		c.osc_send_port = clamp_port(s.get_int("osc_send_port"));
+	} else if (s.has("syn_send_port")) {
+		c.osc_send_port = clamp_port(s.get_int("syn_send_port"));
+		seeded = true;
+	}
+	if (s.has("osc_feedback_port")) {
+		c.osc_feedback_port = clamp_feedback_port(s.get_int("osc_feedback_port"));
+	} else if (s.has("syn_feedback_port")) {
+		c.osc_feedback_port = clamp_feedback_port(s.get_int("syn_feedback_port"));
+		seeded = true;
+	}
+	c.osc_seeded = seeded;
 
-	type_of(s, "next_type", c.next.type);
-	c.next.channel = (int)midi::clamp_channel(s.get_int("next_channel"));
-	c.next.number = (int)midi::clamp_number(s.get_int("next_number"));
-	type_of(s, "prev_type", c.prev.type);
-	c.prev.channel = (int)midi::clamp_channel(s.get_int("prev_channel"));
-	c.prev.number = (int)midi::clamp_number(s.get_int("prev_number"));
+	c.confirm_timeout_ms = (int)std::clamp((long long)s.get_int("confirm_timeout_ms"), 100ll, 10000ll);
+
+	/* The 2.0 MIDI keys are never read; a non-empty midi_out_device is only logged. */
+	c.midi_out_present = !s.get_string("midi_out_device").empty();
 
 	c.trigger_breakdown = s.get_bool("trigger_breakdown");
 	c.trigger_drop = s.get_bool("trigger_drop");

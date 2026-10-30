@@ -43,8 +43,17 @@ void EventEngine::set_lead_ms(double lead_ms)
 	lead_ms_ = lead_ms;
 }
 
+void EventEngine::set_release_horizon_ms(double ms)
+{
+	horizon_ms_ = std::clamp(ms, 0.0, 500.0);
+}
+
 void EventEngine::note(const std::string &line)
 {
+	// The log is a determinism oracle for tests; in a long set it must not grow without bound.
+	constexpr size_t kMaxLog = 8192;
+	if (log_.size() >= kMaxLog)
+		log_.erase(log_.begin(), log_.begin() + static_cast<long>(kMaxLog / 2));
 	log_.push_back(line);
 }
 
@@ -144,11 +153,13 @@ void EventEngine::plan(const Mapping &m, const std::string &event, const std::st
 		target = next_boundary(m.quantize, event_beat, clk);
 
 	MappingState &st = state_[m.id];
+	const std::string group = m.cooldown_group.empty() ? m.id : m.cooldown_group;
+	CooldownState &cs = cooldown_[group];
 
 	// Cooldown (min_interval_beats): automatic section edges only, forced edges bypass when
-	// forced_bypass is set.
-	if (is_section_event(m.event) && m.min_interval_beats > 0 && st.fired) {
-		const double since = target - st.last_fire_beat;
+	// forced_bypass is set. The anchor is shared by every mapping in the same cooldown_group.
+	if (is_section_event(m.event) && m.min_interval_beats > 0 && cs.fired) {
+		const double since = target - cs.last_fire_beat;
 		if (since < static_cast<double>(m.min_interval_beats) - 1e-9) {
 			if (forced && m.forced_bypass) {
 				char buf[192];
@@ -191,6 +202,7 @@ void EventEngine::plan(const Mapping &m, const std::string &event, const std::st
 		}
 		Pending p;
 		p.mapping_id = m.id;
+		p.cooldown_group = group;
 		p.event = event;
 		p.key = key;
 		p.route = action.route;
@@ -233,6 +245,10 @@ std::vector<PlannedSend> EventEngine::tick(const ClockSample &clk, const directo
 							     p.quantize == Quantize::Phrase;
 					      }),
 			       pending_.end());
+		// The beat grid was re-anchored: an old cooldown anchor is meaningless in the new grid (a
+		// reset that lands behind it would suppress every automatic switch until the clock caught
+		// up), so it is dropped, as 2.0's SwitchScheduler::resync does.
+		cooldown_.clear();
 		last_epoch_ = clk.epoch;
 		last_beat_ = clk.beat;
 		last_phrase_ = clk.phrase;
@@ -290,21 +306,27 @@ std::vector<PlannedSend> EventEngine::tick(const ClockSample &clk, const directo
 				if (m.enabled && m.event == ev)
 					plan(m, ev, "", b, b, clk, "", now_ns, false);
 		} else {
+			// scene_loaded fires once per feedback datagram. Its key is empty: every source has
+			// its own feedback port, so it never goes through the process-wide guard.
 			for (const Mapping &m : map_.mappings())
 				if (m.enabled && m.event == "scene_loaded")
-					plan(m, "scene_loaded", "scene:" + q.scene, b, b, clk, q.scene, now_ns, false);
+					plan(m, "scene_loaded", "", b, b, clk, q.scene, now_ns, false);
 		}
 	}
 
-	// Fire the plans whose send time has arrived.
+	// Release the plans whose send time has arrived, or is within the release horizon: those carry
+	// an absolute deadline so the transport sends them on time instead of on the next frame.
+	const double bpm = clk.bpm > 1.0 ? clk.bpm : 128.0;
+	const double horizon_beats = horizon_ms_ / 1000.0 * bpm / 60.0;
 	for (size_t i = 0; i < pending_.size();) {
-		if (pending_[i].send_at_beats <= b + 1e-9) {
+		if (pending_[i].send_at_beats <= b + horizon_beats + 1e-9) {
 			Pending p = std::move(pending_[i]);
 			pending_.erase(pending_.begin() + static_cast<long>(i));
 
 			MappingState &st = state_[p.mapping_id];
-			st.last_fire_beat = p.target_beat;
-			st.fired = true;
+			CooldownState &cs = cooldown_[p.cooldown_group];
+			cs.last_fire_beat = p.target_beat;
+			cs.fired = true;
 			if (now_ns > 0)
 				st.last_fire_ns = now_ns;
 
@@ -317,8 +339,10 @@ std::vector<PlannedSend> EventEngine::tick(const ClockSample &clk, const directo
 			s.target_beat = p.target_beat;
 			s.send_at_beats = p.send_at_beats;
 			if (now_ns > 0) {
+				const double ahead_beats = std::max(0.0, p.send_at_beats - b);
 				s.has_send_at_ns = true;
-				s.send_at_ns = now_ns;
+				s.send_at_ns =
+					now_ns + static_cast<int64_t>(std::llround(ahead_beats * 60.0 / bpm * 1e9));
 			}
 			char buf[160];
 			std::snprintf(buf, sizeof(buf), "%9.3f fire     %-15s %s at %.3f", b, s.mapping_id.c_str(),

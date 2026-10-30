@@ -11,6 +11,7 @@
 // sequence; EventGuard deduplicates arbitrary (kind, key) pairs compared lexicographically (the
 // pair's operator< is kind-first, then key). Keys are the spec 4.2 exactly-once keys rendered as
 // strings; manual events carry an empty key and never go through the guard.
+#include <deque>
 #include <mutex>
 #include <set>
 #include <string>
@@ -37,6 +38,40 @@ public:
 private:
 	mutable std::mutex mu_;
 	std::set<std::pair<std::string, std::string>> claimed_; // lexicographic (kind, key)
+};
+
+// One source's side of the guard. A musical event can produce several sends on one source (a
+// mapping with several actions, several mappings on the same event); the source claims the event
+// once and then owns it, so all of its own sends for that event go out while every other source
+// skips it. Sends with an empty key (manual presses, scene_loaded) are always this source's own.
+// Not thread-safe on its own: the source calls it under its own mutex.
+class SourceClaims {
+public:
+	bool may_send(EventGuard &guard, const std::string &kind, const std::string &key)
+	{
+		if (key.empty())
+			return true;
+		const std::pair<std::string, std::string> k(kind, key);
+		if (owned_.count(k))
+			return true;
+		if (!guard.claim(kind, key))
+			return false;
+		owned_.insert(k);
+		order_.push_back(k);
+		// Only recent events can still have sends pending; keep the set bounded in a long set.
+		if (order_.size() > kMaxOwned) {
+			owned_.erase(order_.front());
+			order_.pop_front();
+		}
+		return true;
+	}
+
+	size_t owned() const { return owned_.size(); }
+
+private:
+	static constexpr size_t kMaxOwned = 1024;
+	std::set<std::pair<std::string, std::string>> owned_;
+	std::deque<std::pair<std::string, std::string>> order_;
 };
 
 } // namespace cd
