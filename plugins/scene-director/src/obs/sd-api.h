@@ -67,6 +67,10 @@ bool set_min_interval(const std::string &id, int beats);
 // Scene lead (syn_lead_ms), 0..500: the source's own setting (used by the engine for `lead`).
 void set_scene_lead(obs_source_t *src, double lead_ms);
 
+// OSC host and ports (the source's own settings; the transport restarts from the update, never
+// from a tick). Callers refuse equal non-zero send / feedback ports before calling (spec 4.6).
+void set_osc(obs_source_t *src, const std::string &host, int send_port, int feedback_port);
+
 /* manual switches: always fire, and restart the cooldown */
 void manual_next(obs_source_t *src);
 void manual_prev(obs_source_t *src);
