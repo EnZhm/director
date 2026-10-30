@@ -62,9 +62,10 @@ TEST_CASE("an empty settings object falls back to the defaults")
 	const SourceConfig c = read_config(s);
 	CHECK(c.osc_host == "127.0.0.1");
 	CHECK(c.osc_send_port == 7000);
-	CHECK(c.osc_feedback_port == 7001);
+	CHECK(c.osc_feedback_port == 9001);
 	CHECK(c.confirm_timeout_ms == 2000);
 	CHECK(c.sync_offset_ms == 0);
+	CHECK_FALSE(port_conflict(c));
 	CHECK(c.lead_ms == doctest::Approx(0.0));
 	CHECK(c.trigger_breakdown);
 	CHECK(c.trigger_drop);
@@ -240,4 +241,34 @@ TEST_CASE("malformed JSON leaves the store alone")
 
 	CHECK(!s.from_json("[1,2,3]", &error));
 	CHECK(s.get_string("osc_host") == "keep me");
+}
+
+TEST_CASE("port guard: feedback == send (non-zero) is a conflict, with the spec 4.6 text")
+{
+	Settings s;
+	apply_settings_defaults(s);
+	s.set_int("osc_send_port", 7000);
+	s.set_int("osc_feedback_port", 7000);
+	SourceConfig c = read_config(s);
+	CHECK(port_conflict(c));
+	CHECK(port_conflict_text("Scene Director", 7000) ==
+	      "'Scene Director': feedback port 7000 equals the send port; set Synesthesia's OSC Output port to a "
+	      "different port (default 9001)");
+
+	s.set_int("osc_feedback_port", 0); /* 0 = no feedback: never a conflict */
+	CHECK_FALSE(port_conflict(read_config(s)));
+	s.set_int("osc_feedback_port", 9001);
+	CHECK_FALSE(port_conflict(read_config(s)));
+}
+
+TEST_CASE("port guard: a conflict seeded from Clip Director 1.1 syn_* ports is reported the same way")
+{
+	Settings s; /* a CD 1.1 object: syn_* only, no osc_* */
+	s.set_string("syn_host", "127.0.0.1");
+	s.set_int("syn_send_port", 7000);
+	s.set_int("syn_feedback_port", 7000);
+	const SourceConfig c = read_config(s);
+	CHECK(c.osc_seeded);
+	CHECK(c.osc_feedback_port == 7000);
+	CHECK(port_conflict(c));
 }

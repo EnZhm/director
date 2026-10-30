@@ -82,8 +82,9 @@ struct SdSource {
 
 	std::string osc_host; // the transport's last applied host/ports
 	int osc_send_port = 0, osc_feedback_port = 0;
-	uint64_t drive_ns = 0;     // last time the scheduler ran
-	uint64_t last_dropped = 0; // last seen send-queue drop count
+	bool port_conflict = false; // feedback port == send port: transport runs without feedback
+	uint64_t drive_ns = 0;      // last time the scheduler ran
+	uint64_t last_dropped = 0;  // last seen send-queue drop count
 	uint64_t switches = 0;
 	std::string last_reason;
 	double last_switch_beat = 0.0;
@@ -294,14 +295,16 @@ void drain_feedback(SdSource *c, int64_t now_ns)
 	if (!c->osc || !c->osc->running())
 		return;
 	std::vector<uint8_t> msg;
+	std::vector<director_osc::OscMessage> msgs;
 	while (c->osc->pop(msg)) {
-		director_osc::OscMessage m;
-		if (!director_osc::osc_decode(msg, m)) {
-			c->confirm.on_datagram(now_ns); // still a datagram: feeds the link window
-			continue;
-		}
+		/* Any datagram, decodable or not, feeds the link window. Synesthesia sends its feedback
+		 * as OSC bundles; osc_decode_packet unwraps them (and bare messages) in packet order. */
 		c->confirm.on_datagram(now_ns);
-		if (m.address.rfind("/scenes/", 0) == 0 && m.address.size() > 8) {
+		if (!director_osc::osc_decode_packet(msg, msgs))
+			continue;
+		for (const director_osc::OscMessage &m : msgs) {
+			if (m.address.rfind("/scenes/", 0) != 0 || m.address.size() <= 8)
+				continue;
 			const std::string name = m.address.substr(8);
 			for (const cd::ConfirmEvent &ev : c->confirm.on_scene(name, now_ns)) {
 				obs_log(LOG_INFO, "[scene-director] %s", ev.text.c_str());
@@ -475,7 +478,7 @@ void sd_defaults(obs_data_t *s)
 
 	obs_data_set_default_string(s, "osc_host", "127.0.0.1");
 	obs_data_set_default_int(s, "osc_send_port", 7000);
-	obs_data_set_default_int(s, "osc_feedback_port", 7001);
+	obs_data_set_default_int(s, "osc_feedback_port", 9001);
 	obs_data_set_default_int(s, "confirm_timeout_ms", 2000);
 	obs_data_set_default_double(s, "syn_lead_ms", 0.0);
 }
@@ -520,7 +523,9 @@ void start_transport_locked(SdSource *c)
 	c->osc = std::make_unique<director_osc::OscTransport>();
 	c->last_dropped = 0;
 	std::string err;
-	if (!c->osc->start(c->cfg.osc_host, c->cfg.osc_send_port, c->cfg.osc_feedback_port, &err)) {
+	/* Spec 4.6 port guard: with feedback == send, run without a feedback socket; sends continue. */
+	const int feedback_port = cd::port_conflict(c->cfg) ? 0 : c->cfg.osc_feedback_port;
+	if (!c->osc->start(c->cfg.osc_host, c->cfg.osc_send_port, feedback_port, &err)) {
 		obs_log(LOG_WARNING, "'%s': OSC transport: %s", obs_source_get_name(c->self), err.c_str());
 		note(c, "OSC: %s", err.c_str());
 		c->confirm.set_error(true);
@@ -548,6 +553,10 @@ void apply(SdSource *c, obs_data_t *settings)
 		c->cfg = n;
 		c->engine->set_lead_ms(n.lead_ms);
 		log_migration(c, n);
+		c->port_conflict = cd::port_conflict(n);
+		if (c->port_conflict) /* once per settings change (create/update), never per tick */
+			obs_log(LOG_WARNING, "[scene-director] %s",
+				cd::port_conflict_text(obs_source_get_name(c->self), n.osc_feedback_port).c_str());
 		if (!transport_stale(c))
 			return;
 		old = std::move(c->osc); /* c->osc is null until restarted: drain/send skip it */
@@ -766,6 +775,7 @@ bool status(obs_source_t *src, Status &o)
 	o.osc_send_port = c->cfg.osc_send_port;
 	o.osc_feedback_port = c->cfg.osc_feedback_port;
 	o.feedback_bound = c->osc ? c->osc->feedback_bound() : false;
+	o.port_conflict = c->port_conflict;
 	o.sent = c->osc ? c->osc->sent() : 0;
 	o.received = c->osc ? c->osc->received() : 0;
 	o.dropped = c->osc ? c->osc->dropped() : 0;

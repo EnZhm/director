@@ -62,7 +62,7 @@ void apply_settings_defaults(Settings &s);
 struct SourceConfig {
 	std::string osc_host = "127.0.0.1"; // Synesthesia machine
 	int osc_send_port = 7000;           // Synesthesia Settings > OSC > Input port
-	int osc_feedback_port = 7001;       // Synesthesia Settings > OSC > Output port; 0 = no feedback
+	int osc_feedback_port = 9001;       // Synesthesia Settings > OSC > Output port; 0 = no feedback
 	int confirm_timeout_ms = 2000;      // 100..10000
 
 	int sync_offset_ms = 0; // 2.0 key, unchanged
@@ -79,5 +79,11 @@ struct SourceConfig {
 };
 
 SourceConfig read_config(const Settings &s);
+
+// Spec 4.6 port guard: a non-zero feedback port equal to the send port would loop Synesthesia's
+// output into its own input. The source then runs without a feedback socket (sends continue).
+bool port_conflict(const SourceConfig &c);
+// The spec 4.6 log line, without the "[scene-director] " prefix.
+std::string port_conflict_text(const std::string &source_name, int port);
 
 } // namespace cd

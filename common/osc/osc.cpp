@@ -189,6 +189,61 @@ bool osc_decode(const std::vector<uint8_t> &data, OscMessage &out)
 	return osc_decode(data.empty() ? nullptr : data.data(), data.size(), out);
 }
 
+namespace {
+
+const uint8_t kBundleTag[8] = {'#', 'b', 'u', 'n', 'd', 'l', 'e', 0};
+
+bool is_bundle(const uint8_t *data, std::size_t len)
+{
+	return len >= 8 && std::memcmp(data, kBundleTag, 8) == 0;
+}
+
+/* One packet or bundle element. depth 1 = the outermost bundle. */
+bool decode_element(const uint8_t *data, std::size_t len, int depth, std::vector<OscMessage> &out)
+{
+	if (!data || len == 0)
+		return false;
+	if (!is_bundle(data, len)) {
+		OscMessage m;
+		if (!osc_decode(data, len, m))
+			return false;
+		out.push_back(std::move(m));
+		return true;
+	}
+	if (depth > kOscMaxBundleDepth || len < 16) /* "#bundle\0" + 8-byte time tag */
+		return false;
+	std::size_t off = 16; /* the time tag is ignored: feedback is handled on arrival */
+	while (off < len) {
+		if (len - off < 4)
+			return false;
+		const int32_t size = static_cast<int32_t>(get_u32(data, off));
+		off += 4;
+		if (size <= 0 || (size % 4) != 0 || static_cast<std::size_t>(size) > len - off)
+			return false;
+		if (!decode_element(data + off, static_cast<std::size_t>(size), depth + 1, out))
+			return false;
+		off += static_cast<std::size_t>(size);
+	}
+	return true;
+}
+
+} // namespace
+
+bool osc_decode_packet(const uint8_t *data, std::size_t len, std::vector<OscMessage> &out)
+{
+	out.clear();
+	if (!decode_element(data, len, 1, out)) {
+		out.clear();
+		return false;
+	}
+	return true;
+}
+
+bool osc_decode_packet(const std::vector<uint8_t> &data, std::vector<OscMessage> &out)
+{
+	return osc_decode_packet(data.empty() ? nullptr : data.data(), data.size(), out);
+}
+
 std::string osc_slug(const std::string &name)
 {
 	std::string s;
