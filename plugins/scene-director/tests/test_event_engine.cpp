@@ -236,8 +236,8 @@ TEST_CASE("placeholder expansion: section, scene, beat, phrase, bar, section_seq
 	const std::vector<PlannedSend> s = eng.tick(c, {}, {scene("Foo")}, 0);
 	REQUIRE(s.size() == 1);
 	REQUIRE(s[0].args.size() == 7);
-	CHECK(s[0].args[0].type == EventArg::Type::Int);
-	CHECK(s[0].args[0].i == 2); // drop
+	CHECK(s[0].args[0].type == EventArg::Type::String);
+	CHECK(s[0].args[0].s == "drop");
 	CHECK(s[0].args[1].type == EventArg::Type::String);
 	CHECK(s[0].args[1].s == "Foo");
 	CHECK(s[0].args[2].i == 40); // beat

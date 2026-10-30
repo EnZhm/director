@@ -99,8 +99,8 @@ void EventEngine::expand_placeholders(const std::string &s, const ClockSample &c
 {
 	EventArg a;
 	if (s == "{section}") {
-		a.type = EventArg::Type::Int;
-		a.i = static_cast<int32_t>(clk.section);
+		a.type = EventArg::Type::String;
+		a.s = section_name(clk.section);
 	} else if (s == "{scene}") {
 		a.type = EventArg::Type::String;
 		a.s = scene;

@@ -737,7 +737,7 @@ EventMap::ParseResult EventMap::parse(const std::string &text)
 		}
 		const JNode *evn = mn.get("event");
 		if (!bad && (!evn || evn->type != JType::String || !valid_event(evn->str))) {
-			reason = "event must be one of breakdown/drop/groove/section/phrase/bar/palette/"
+			reason = "event must be one of breakdown/drop/groove/section/phrase/bar/"
 				 "manual_next/manual_prev/scene_loaded";
 			bad = true;
 		}
