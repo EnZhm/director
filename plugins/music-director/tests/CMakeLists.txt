@@ -34,6 +34,7 @@ add_library(
   ${MD_DIRECTOR_ROOT}/beat_tracker.cpp
   ${MD_DIRECTOR_ROOT}/section_state.cpp
   ${MD_DIRECTOR_ROOT}/migration.cpp
+  ${MD_DIRECTOR_ROOT}/midi_legacy.cpp
 )
 target_include_directories(md_core PUBLIC ${MD_DIRECTOR_ROOT})
 
@@ -52,6 +53,7 @@ add_executable(
   test_music_commands.cpp
   test_clock_epoch.cpp
   test_migration.cpp
+  test_midi_legacy.cpp
   fixtures/gen_fixtures.cpp
 )
 target_link_libraries(md_clock_tests PRIVATE md_core)

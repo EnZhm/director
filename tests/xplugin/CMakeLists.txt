@@ -1,5 +1,5 @@
 # Cross-plugin tests for the Director suite:
-#   xplugin_tests  director-follow edge cases, the shared MIDI code, Palette Director exactly-once,
+#   xplugin_tests  director-follow edge cases, Palette Director exactly-once,
 #                  and the Music Director + Palette Director equivalence with PD 1.2.0 (golden)
 #   xplugin_cd     Clip Director exactly-once (own executable: Clip and Scene Director both use
 #   xplugin_sd     Scene Director exactly-once   namespace cd for their cores)
@@ -28,15 +28,6 @@ if(MSVC)
 else()
   set(XP_WARN -Wall -Wextra -Werror)
 endif()
-
-add_library(
-  director_midi_core
-  STATIC
-  ${DIRECTOR_ROOT}/common/midi/midi_map.cpp
-  ${DIRECTOR_ROOT}/common/midi/midi_msg.cpp
-)
-target_include_directories(director_midi_core PUBLIC ${DIRECTOR_ROOT}/common/midi)
-target_link_libraries(director_midi_core PUBLIC Threads::Threads)
 
 # The shared OSC library (codec + UDP transport), namespace director_osc. No plugin links it yet.
 add_library(
@@ -87,14 +78,12 @@ add_executable(
   xplugin_tests
   main.cpp
   test_follow.cpp
-  test_midi_map.cpp
-  test_midi_msg.cpp
   test_xonce_pd.cpp
   test_equivalence.cpp
 )
 target_include_directories(xplugin_tests PRIVATE ${DIRECTOR_ROOT}/common ${PLUGINS} ${DOCTEST})
 target_compile_definitions(xplugin_tests PRIVATE XPLUGIN_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden")
-target_link_libraries(xplugin_tests PRIVATE director_midi_core xp_md_core xp_pd_core)
+target_link_libraries(xplugin_tests PRIVATE xp_md_core xp_pd_core)
 target_compile_options(xplugin_tests PRIVATE ${XP_WARN})
 add_test(NAME xplugin COMMAND xplugin_tests)
 

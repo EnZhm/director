@@ -30,12 +30,18 @@ Director") and keep rendering the live state.
 | Dock id | Content |
 |---|---|
 | `music-director-dock` | BPM / confidence, phrase.bar.beat, beat lights, section, level/bass meter, 64-beat timeline, the audio source picker, input gain, kick sensitivity, fallback BPM, phrase length, and the clock buttons (Tap tempo, Phrase is now, Drop now, Force breakdown, Lock BPM, Nudge). |
-| `midi-director-dock` | MIDI in (Windows): learn a MIDI note or CC and map it to **any** OBS hotkey — Music (`md_*`), Palette, Clips or Synesthesia. Mappings are stored with the scene collection under `midi_director`, so existing mappings load unchanged. |
 
 ## Hotkeys
 
 `md_phrase_now`, `md_drop_now`, `md_force_breakdown`, `md_tap_tempo`, `md_lock_bpm`,
-`md_nudge_back`, `md_nudge_fwd` (bind them in Settings > Hotkeys).
+`md_nudge_back`, `md_nudge_fwd`. Bind them in Settings > Hotkeys to a key, or to a Stream Deck
+button with Stream Deck's OBS hotkey action. `md_drop_now` ("Drop now") is the one a controller
+usually drove in 2.0.
+
+MIDI Director (the 2.0 MIDI-in dock) was removed in 2.1. A scene collection's saved `midi_director`
+mappings are kept verbatim and inactive; on load Music Director logs them once with a rebind hint
+per control and writes a copy to `plugin_config/music-director/midi-director-<collection>.json`.
+See [docs/archive/midi-director.md](../../docs/archive/midi-director.md).
 
 ## Settings and migration
 
